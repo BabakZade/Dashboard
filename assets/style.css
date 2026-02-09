@@ -1,0 +1,9 @@
+/* Global sans-serif font */
+body {
+    font-family: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Optional: make headers a bit nicer */
+h1, h2, h3, h4 {
+    font-weight: 600;
+}
