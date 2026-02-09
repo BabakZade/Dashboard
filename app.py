@@ -368,7 +368,7 @@ def part3_both_losses_fig(rul_pred: float):
 
 # -----------------------------
 # Part 4 (synthetic examples)
-# -----------------------------
+# ----------------------------- 
 def record_cost_linear(pred: float, true: float) -> float:
     if pred <= true:
         return C_PR + ALPHA * (true - pred)
