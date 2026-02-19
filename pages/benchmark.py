@@ -141,17 +141,23 @@ def build_output_rows_page2(data_rows, input_preds, seed: int = 7):
 
 
 # Function to generate random predictions for Model 1 and Model 2
-def generate_random_predictions(data_rows, seed: int = 7):
+def generate_random_predictions(data_rows, rul_column, seed: int = 7):
     rng = np.random.default_rng(seed)
 
-    # Generate random predictions (size of data_rows)
-    model1_preds = rng.normal(loc=0, scale=5, size=len(data_rows))  # Example: Normal distribution with mean=0, std=5
-    model2_preds = rng.normal(loc=0, scale=5, size=len(data_rows))  # Different predictions for model2
+    # Extract the actual RUL values from the data (assuming 'rul_column' contains the RUL)
+    actual_rul =[]
+    for r in data_raw:
+        true = float(r[rul_column])  # Accessing the "rul" value from the dictionary
+        actual_rul.append(true)
+    # Generate random noise around the RUL values to simulate predictions
+    model1_preds = actual_rul + rng.normal(loc=0, scale=5, size=len(data_rows))  # Model 1 predictions with noise
+    model2_preds = actual_rul + rng.normal(loc=0, scale=5, size=len(data_rows))  # Model 2 predictions with noise
     
     return model1_preds, model2_preds
 
-# Generate random predictions for Model 1 and Model 2 (equal to the size of DATA_ROWS)
-model1_preds, model2_preds = generate_random_predictions(DATA_ROWS, seed=7)
+# Example usage
+model1_preds, model2_preds = generate_random_predictions(DATA_ROWS, rul_column='rul', seed=7)
+
 
 
 OUT_ROWS_page1 = build_output_rows_page1(DATA_ROWS, model1_preds)
@@ -285,14 +291,4 @@ def register_callbacks(app):
         return _summary_fig(out_rows)
 
 
-# Create Dash app instance
-app = Dash(__name__)
 
-# Set the layout for the app
-app.layout = layout()
-
-# Register callbacks
-register_callbacks(app)
-
-if __name__ == "__main__":
-    app.run_server(debug=True)

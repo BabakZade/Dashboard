@@ -1,21 +1,19 @@
 /* =========================
    THEME TOKENS (GLOBAL)
    ========================= */
-:root{
-  --accent: #2c7be5;                 /* <<< MAIN COLOR (default, used for links, focus glow, etc.) */
+:root {
+  --accent: #2c7be5;                 /* Main Color */
   --accent-soft: rgba(44,123,229,.14);
-
   --bg: #f7f8fb;
   --card: #ffffff;
   --border: #e6e9f0;
   --text: #111827;
   --muted: #6b7280;
 
-  /* If Bootstrap is loaded, override its primary */
+  /* Override Bootstrap's primary color */
   --bs-primary: #2c7be5;
   --bs-primary-rgb: 44,123,229;
 }
-
 
 /* =========================
    GLOBAL TYPOGRAPHY (ALL PAGES)
@@ -27,11 +25,32 @@ body {
   color: var(--text);
 }
 
-h1, h2, h3, h4 {
-  font-weight: 600;
-  letter-spacing: 0.4px;
+/* Font Awesome Icon Styling */
+.fa {
+  font-family: 'Font Awesome 6 Free' !important;  /* Ensure Font Awesome is applied */
+  font-weight: 900;  /* Solid icons weight */
+  font-size: 24px !important;  /* Set a reasonable size for icons */
+  color: #2c7be5;  /* Default color for icons */
 }
 
+/* Specific icon styling for solid icons */
+.fa-solid {
+  font-family: 'Font Awesome 6 Free' !important;
+  font-weight: 900;  /* Solid icons require this weight */
+}
+
+/* Gear icon specific styling */
+#gear-icon, #gear-icon-2 {
+  font-size: 30px;  /* Size of the gear icon */
+  cursor: pointer;
+  color: black;  /* Default color for icons */
+  margin-right: 20px;
+}
+
+/* Different color for the second gear icon */
+#gear-icon-2 {
+  color: gray;
+}
 
 /* =========================
    LINKS + FOCUS
@@ -39,6 +58,7 @@ h1, h2, h3, h4 {
 a, a:visited {
   color: var(--accent) !important;
 }
+
 a:hover {
   opacity: .85;
 }
@@ -50,140 +70,4 @@ a:hover {
 
 button:hover {
   background: var(--accent-soft) !important;
-}
-
-
-/* =========================================================
-   FORCE SLIDER COLORS (overrides Bootstrap)
-   ========================================================= */
-
-/* Default Slider (Using --accent) */
-html body .rc-slider .rc-slider-track {
-  background-color: var(--accent) !important; /* Default track color */
-}
-
-html body .rc-slider .rc-slider-handle {
-  border-color: var(--accent) !important;
-  background-color: #fff !important; /* White handle */
-}
-
-html body .rc-slider .rc-slider-dot-active {
-  border-color: var(--accent) !important; /* Active dot color */
-}
-
-
-/* =========================
-   INDIVIDUAL SLIDER COLORS
-   ========================= */
-
-/* GREEN Slider */
-html body .dash-slider-container.slider-green .rc-slider-track {
-  background-color: #2b6b42 !important; /* Green track */
-}
-
-html body .dash-slider-container.slider-green .rc-slider-handle {
-  border-color: #2b6b42 !important;  /* Green border for handle */
-  background-color: #fff !important; /* White background for handle */
-}
-
-html body .dash-slider-container.slider-green .rc-slider-dot-active {
-  border-color: #2b6b42 !important;  /* Green active dot */
-}
-
-/* Handle hover/focus/active states for Green */
-html body .dash-slider-container.slider-green .rc-slider-handle:hover,
-html body .dash-slider-container.slider-green .rc-slider-handle:focus,
-html body .dash-slider-container.slider-green .rc-slider-handle:active {
-  box-shadow: 0 0 0 6px rgba(43, 107, 66, 0.18) !important; /* Green shadow on hover/focus/active */
-}
-
-
-/* RED Slider */
-html body .dash-slider-container.slider-red .rc-slider-track {
-  background-color: #ef4444 !important; /* Red track */
-}
-
-html body .dash-slider-container.slider-red .rc-slider-handle {
-  border-color: #ef4444 !important;  /* Red border */
-  background-color: #fff !important; /* White handle */
-}
-
-html body .dash-slider-container.slider-red .rc-slider-dot-active {
-  border-color: #ef4444 !important;  /* Red active dot */
-}
-
-/* Handle hover/focus/active states for Red */
-html body .dash-slider-container.slider-red .rc-slider-handle:hover,
-html body .dash-slider-container.slider-red .rc-slider-handle:focus,
-html body .dash-slider-container.slider-red .rc-slider-handle:active {
-  box-shadow: 0 0 0 6px rgba(239, 68, 68, .18) !important; /* Red shadow on hover/focus/active */
-}
-
-
-/* BLUE Slider */
-html body .dash-slider-container.slider-blue .rc-slider-track {
-  background-color: #2563eb !important; /* Blue track */
-}
-
-html body .dash-slider-container.slider-blue .rc-slider-handle {
-  border-color: #2563eb !important;  /* Blue border */
-  background-color: #fff !important; /* White handle */
-}
-
-html body .dash-slider-container.slider-blue .rc-slider-dot-active {
-  border-color: #2563eb !important;  /* Blue active dot */
-}
-
-/* Handle hover/focus/active states for Blue */
-html body .dash-slider-container.slider-blue .rc-slider-handle:hover,
-html body .dash-slider-container.slider-blue .rc-slider-handle:focus,
-html body .dash-slider-container.slider-blue .rc-slider-handle:active {
-  box-shadow: 0 0 0 6px rgba(37, 99, 235, .18) !important; /* Blue shadow on hover/focus/active */
-}
-
-
-/* =========================
-   TOOLTIP UTILITY
-   ========================= */
-.tile {
-  position: relative;
-}
-
-.tile:hover .custom-tooltip {
-  display: block !important;
-}
-
-/* =========================
-   PAGE 1 LAYOUT (.p1-*), Make Responsive
-   ========================= */
-.p1-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 14px;
-  align-items: start;
-}
-
-.p1-main {
-  min-width: 0;
-}
-
-.p1-side {
-  min-width: 0;
-  position: sticky;
-  top: 64px;
-  height: calc(100vh - 76px);
-  overflow-y: auto;
-  padding-bottom: 10px;
-}
-
-@media (max-width: 1100px) {
-  .p1-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .p1-side {
-    position: static;
-    height: auto;
-    overflow: visible;
-  }
 }

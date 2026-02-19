@@ -1,9 +1,12 @@
-# app.py
 import importlib.util
 import subprocess
 import sys
+from dash import Dash, dcc, html, Input, Output, State
+import dash_bootstrap_components as dbc
+from pages import home, cost_function, data_simulator, rul_distribution, cost_sensitive_model, benchmark
+from pages.benchmark import DATA_ROWS, OUT_ROWS
 
-
+# Check for missing required packages and install them
 REQUIRED = {
     "dash": "dash",
     "plotly": "plotly",
@@ -31,17 +34,14 @@ if missing:
         print("❌ Still missing after install:", ", ".join(still_missing))
         raise SystemExit(1)
 
-from dash import Dash, dcc, html, Input, Output, State
-
-from pages import home, cost_function, data_simulator, rul_distribution, cost_sensitive_model, benchmark
-import dash_bootstrap_components as dbc
-
-from pages.benchmark import DATA_ROWS, OUT_ROWS
-
+# External stylesheets (including Font Awesome CDN)
+external_stylesheets = [
+    dbc.themes.BOOTSTRAP,
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"  # Font Awesome 6 CDN
+]
 
 
-external_stylesheets = [dbc.themes.BOOTSTRAP]  # Use a different theme
-
+# Initialize the Dash app
 app = Dash(
     __name__,
     suppress_callback_exceptions=True,
@@ -50,6 +50,7 @@ app = Dash(
 )
 app.title = "Cost-sensitive predictive maintenance"
 
+# Routes and icons for the sidebar menu
 ROUTES = {
     "/": ("Home", home.layout),
     "/cost-function": ("Page 1 — Cost function", cost_function.layout),
@@ -60,23 +61,23 @@ ROUTES = {
 }
 
 ICONS = {
-    "/": "fa-solid fa-house",
-    "/cost-function": "fa-solid fa-euro-sign",
-    "/data-simulator": "fa-solid fa-flask",
-    "/rul-distribution": "fa-solid fa-chart-column",
-    "/cost-sensitive-model": "fa-solid fa-gears",
-    "/benchmark": "fa-solid fa-chart-line",
+    "/": "fa-solid fa-house-laptop",  # Home 
+    "/cost-function": "fa-solid fa-file-contract", 
+    "/data-simulator": "fa-solid fa-database",  # Flask
+    "/rul-distribution": "fa-solid fa-chart-area",  # Line chart (alternative to fa-area-chart)
+    "/cost-sensitive-model": "fa-solid fa-filter-circle-dollar",  # Gear icon (fa-gear can sometimes have issues)
+    "/benchmark": "fa-solid fa-chart-pie",  # Pie chart
 }
 
 DATA_ROWS = benchmark.DATA_ROWS
 OUT_ROWS = benchmark.OUT_ROWS
 
-
+# Function to generate nav links with icons
 def nav_link(label, href, icon_class):
     return dcc.Link(
         html.Div(
             [
-                html.I(className=icon_class, style={"marginRight": "10px"}),
+                html.I(className=icon_class, style={"marginRight": "10px"}),  # Icon class applied
                 label,
             ],
             style={"display": "flex", "alignItems": "center"},
@@ -91,7 +92,7 @@ def nav_link(label, href, icon_class):
         },
     )
 
-
+# Sidebar style
 def sidebar_style(is_open: bool):
     return {
         "width": "270px" if is_open else "0px",
@@ -100,21 +101,17 @@ def sidebar_style(is_open: bool):
         "borderRight": "1px solid #eee",
         "backgroundColor": "white",
         "flexShrink": 0,
-
-        # ✅ keep menu visible while scrolling
         "position": "sticky",
-        "top": "54px",  # must match topbar height
+        "top": "54px",  # Must match topbar height
         "height": "calc(100vh - 54px)",
         "overflowY": "auto",
     }
 
-
-
+# Layout of the main page
 app.layout = html.Div(
     children=[
         dcc.Location(id="url", refresh=False),
         dcc.Store(id="menu_open", data=False),
-
         dcc.Store(id="bench_data_store", data=DATA_ROWS),
         dcc.Store(id="bench_out_store", data=OUT_ROWS),
 
@@ -151,6 +148,7 @@ app.layout = html.Div(
             ],
         ),
 
+        # Shell for content and sidebar
         html.Div(
             id="shell",
             style={"display": "flex", "maxWidth": "1400px", "margin": "0 auto"},
@@ -159,21 +157,15 @@ app.layout = html.Div(
                     id="sidebar",
                     style=sidebar_style(False),
                     children=[
-                        html.Div(
-                            style={"padding": "12px"},
-                            children=[
-                                html.Div("Menu", style={"fontWeight": 900, "marginBottom": "10px"}),
-                                nav_link("Home", "/", ICONS["/"]),
-                                nav_link("Cost function", "/cost-function", ICONS["/cost-function"]),
-                                nav_link("Data Simulator", "/data-simulator", ICONS["/data-simulator"]),
-                                nav_link("RUL distribution", "/rul-distribution", ICONS["/rul-distribution"]),
-                                nav_link("Cost sensitive model", "/cost-sensitive-model", ICONS["/cost-sensitive-model"]),
-                                nav_link("Benchmark", "/benchmark", ICONS["/benchmark"]),
-                            ],
-                        )
+                        html.Div("Menu", style={"fontWeight": 900, "marginBottom": "10px"}),
+                        nav_link("Home", "/", ICONS["/"]),
+                        nav_link("Cost function", "/cost-function", ICONS["/cost-function"]),
+                        nav_link("Data Simulator", "/data-simulator", ICONS["/data-simulator"]),
+                        nav_link("RUL distribution", "/rul-distribution", ICONS["/rul-distribution"]),
+                        nav_link("Cost sensitive model", "/cost-sensitive-model", ICONS["/cost-sensitive-model"]),
+                        nav_link("Benchmark", "/benchmark", ICONS["/benchmark"]),
                     ],
                 ),
-
                 html.Div(
                     id="content",
                     style={"flex": 1, "padding": "16px", "minWidth": 0},
@@ -184,7 +176,7 @@ app.layout = html.Div(
     ]
 )
 
-
+# Callback to toggle menu visibility
 @app.callback(
     Output("menu_open", "data"),
     Input("menu_btn", "n_clicks"),
@@ -194,7 +186,7 @@ app.layout = html.Div(
 def toggle_menu(_, is_open):
     return not is_open
 
-
+# Callback to close the menu on navigation
 @app.callback(
     Output("menu_open", "data", allow_duplicate=True),
     Input("url", "pathname"),
@@ -203,7 +195,7 @@ def toggle_menu(_, is_open):
 def close_menu_on_nav(_):
     return False
 
-
+# Apply sidebar style based on the menu state
 @app.callback(
     Output("sidebar", "style"),
     Input("menu_open", "data"),
@@ -211,7 +203,7 @@ def close_menu_on_nav(_):
 def apply_sidebar(is_open):
     return sidebar_style(bool(is_open))
 
-
+# Update page title based on the URL
 @app.callback(
     Output("page_title", "children"),
     Input("url", "pathname"),
@@ -229,7 +221,7 @@ def set_title(pathname):
         style={"display": "flex", "alignItems": "center"},
     )
 
-
+# Callback to render page content based on the URL
 @app.callback(
     Output("page_content", "children"),
     Input("url", "pathname"),
@@ -241,7 +233,7 @@ def render_page(pathname):
         return html.Div("404 — Page not found")
     return ROUTES[pathname][1]()
 
-
+# Register callbacks for pages
 home.register_callbacks(app)
 cost_function.register_callbacks(app)
 data_simulator.register_callbacks(app)
@@ -249,6 +241,7 @@ rul_distribution.register_callbacks(app)
 cost_sensitive_model.register_callbacks(app)
 benchmark.register_callbacks(app)
 
+# Set validation layout for Dash
 app.validation_layout = html.Div(
     [
         app.layout,
@@ -261,6 +254,7 @@ app.validation_layout = html.Div(
     ]
 )
 
+# Start the Dash app
 if __name__ == "__main__":
-    print("Starting Dash on http://127.0.0.1:8050/")
-    app.run(debug=True, host="127.0.0.1", port=8050)
+    print("Starting Dash on http://127.0.0.1:8051/")
+    app.run(debug=True, host="127.0.0.1", port=8051)
