@@ -1,13 +1,189 @@
-/* Global sans-serif font */
+/* =========================
+   THEME TOKENS (GLOBAL)
+   ========================= */
+:root{
+  --accent: #2c7be5;                 /* <<< MAIN COLOR (default, used for links, focus glow, etc.) */
+  --accent-soft: rgba(44,123,229,.14);
+
+  --bg: #f7f8fb;
+  --card: #ffffff;
+  --border: #e6e9f0;
+  --text: #111827;
+  --muted: #6b7280;
+
+  /* If Bootstrap is loaded, override its primary */
+  --bs-primary: #2c7be5;
+  --bs-primary-rgb: 44,123,229;
+}
+
+
+/* =========================
+   GLOBAL TYPOGRAPHY (ALL PAGES)
+   ========================= */
 body {
-    font-family: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: "Century Gothic", CenturyGothic, AppleGothic, "Segoe UI", Arial, sans-serif !important;
+  letter-spacing: 0.3px;
+  background: var(--bg);
+  color: var(--text);
 }
 
-/* Optional: make headers a bit nicer */
 h1, h2, h3, h4 {
-    font-weight: 600;
+  font-weight: 600;
+  letter-spacing: 0.4px;
 }
-/* show tooltip when hovering a tile */
-.tile { position: relative; }
 
-.tile:hover .custom-tooltip { display: block !important; }
+
+/* =========================
+   LINKS + FOCUS
+   ========================= */
+a, a:visited {
+  color: var(--accent) !important;
+}
+a:hover {
+  opacity: .85;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent-soft) !important;
+  outline-offset: 2px;
+}
+
+button:hover {
+  background: var(--accent-soft) !important;
+}
+
+
+/* =========================================================
+   FORCE SLIDER COLORS (overrides Bootstrap)
+   ========================================================= */
+
+/* Default Slider (Using --accent) */
+html body .rc-slider .rc-slider-track {
+  background-color: var(--accent) !important; /* Default track color */
+}
+
+html body .rc-slider .rc-slider-handle {
+  border-color: var(--accent) !important;
+  background-color: #fff !important; /* White handle */
+}
+
+html body .rc-slider .rc-slider-dot-active {
+  border-color: var(--accent) !important; /* Active dot color */
+}
+
+
+/* =========================
+   INDIVIDUAL SLIDER COLORS
+   ========================= */
+
+/* GREEN Slider */
+html body .dash-slider-container.slider-green .rc-slider-track {
+  background-color: #2b6b42 !important; /* Green track */
+}
+
+html body .dash-slider-container.slider-green .rc-slider-handle {
+  border-color: #2b6b42 !important;  /* Green border for handle */
+  background-color: #fff !important; /* White background for handle */
+}
+
+html body .dash-slider-container.slider-green .rc-slider-dot-active {
+  border-color: #2b6b42 !important;  /* Green active dot */
+}
+
+/* Handle hover/focus/active states for Green */
+html body .dash-slider-container.slider-green .rc-slider-handle:hover,
+html body .dash-slider-container.slider-green .rc-slider-handle:focus,
+html body .dash-slider-container.slider-green .rc-slider-handle:active {
+  box-shadow: 0 0 0 6px rgba(43, 107, 66, 0.18) !important; /* Green shadow on hover/focus/active */
+}
+
+
+/* RED Slider */
+html body .dash-slider-container.slider-red .rc-slider-track {
+  background-color: #ef4444 !important; /* Red track */
+}
+
+html body .dash-slider-container.slider-red .rc-slider-handle {
+  border-color: #ef4444 !important;  /* Red border */
+  background-color: #fff !important; /* White handle */
+}
+
+html body .dash-slider-container.slider-red .rc-slider-dot-active {
+  border-color: #ef4444 !important;  /* Red active dot */
+}
+
+/* Handle hover/focus/active states for Red */
+html body .dash-slider-container.slider-red .rc-slider-handle:hover,
+html body .dash-slider-container.slider-red .rc-slider-handle:focus,
+html body .dash-slider-container.slider-red .rc-slider-handle:active {
+  box-shadow: 0 0 0 6px rgba(239, 68, 68, .18) !important; /* Red shadow on hover/focus/active */
+}
+
+
+/* BLUE Slider */
+html body .dash-slider-container.slider-blue .rc-slider-track {
+  background-color: #2563eb !important; /* Blue track */
+}
+
+html body .dash-slider-container.slider-blue .rc-slider-handle {
+  border-color: #2563eb !important;  /* Blue border */
+  background-color: #fff !important; /* White handle */
+}
+
+html body .dash-slider-container.slider-blue .rc-slider-dot-active {
+  border-color: #2563eb !important;  /* Blue active dot */
+}
+
+/* Handle hover/focus/active states for Blue */
+html body .dash-slider-container.slider-blue .rc-slider-handle:hover,
+html body .dash-slider-container.slider-blue .rc-slider-handle:focus,
+html body .dash-slider-container.slider-blue .rc-slider-handle:active {
+  box-shadow: 0 0 0 6px rgba(37, 99, 235, .18) !important; /* Blue shadow on hover/focus/active */
+}
+
+
+/* =========================
+   TOOLTIP UTILITY
+   ========================= */
+.tile {
+  position: relative;
+}
+
+.tile:hover .custom-tooltip {
+  display: block !important;
+}
+
+/* =========================
+   PAGE 1 LAYOUT (.p1-*), Make Responsive
+   ========================= */
+.p1-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+  align-items: start;
+}
+
+.p1-main {
+  min-width: 0;
+}
+
+.p1-side {
+  min-width: 0;
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 76px);
+  overflow-y: auto;
+  padding-bottom: 10px;
+}
+
+@media (max-width: 1100px) {
+  .p1-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .p1-side {
+    position: static;
+    height: auto;
+    overflow: visible;
+  }
+}

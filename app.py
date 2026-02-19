@@ -1,27 +1,52 @@
 # app.py
 import importlib.util
+import subprocess
 import sys
 
-REQUIRED = ["dash", "plotly", "numpy"]
-missing = [p for p in REQUIRED if importlib.util.find_spec(p) is None]
+
+REQUIRED = {
+    "dash": "dash",
+    "plotly": "plotly",
+    "numpy": "numpy",
+    "dash_bootstrap_components": "dash-bootstrap-components",
+}
+
+missing = [mod for mod in REQUIRED if importlib.util.find_spec(mod) is None]
+
 if missing:
-    print("❌ Missing required packages:", ", ".join(missing))
-    print("Install with:")
-    print(f"  {sys.executable} -m pip install " + " ".join(missing))
-    raise SystemExit(1)
+    pkgs = [REQUIRED[m] for m in missing]
+    print("❌ Missing required packages:", ", ".join(pkgs))
+    print("Installing...")
+
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", *pkgs])
+        print("✅ Installed:", ", ".join(pkgs))
+    except Exception as e:
+        print("❌ Install failed:", e)
+        raise SystemExit(1)
+
+    # re-check after install
+    still_missing = [mod for mod in REQUIRED if importlib.util.find_spec(mod) is None]
+    if still_missing:
+        print("❌ Still missing after install:", ", ".join(still_missing))
+        raise SystemExit(1)
 
 from dash import Dash, dcc, html, Input, Output, State
 
 from pages import home, cost_function, data_simulator, rul_distribution, cost_sensitive_model, benchmark
+import dash_bootstrap_components as dbc
 
-external_stylesheets = [
-    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-]
+from pages.benchmark import DATA_ROWS, OUT_ROWS
+
+
+
+external_stylesheets = [dbc.themes.BOOTSTRAP]  # Use a different theme
 
 app = Dash(
     __name__,
     suppress_callback_exceptions=True,
-    external_stylesheets=external_stylesheets
+    external_stylesheets=external_stylesheets,
+    assets_folder="assets"
 )
 app.title = "Cost-sensitive predictive maintenance"
 
@@ -70,13 +95,19 @@ def nav_link(label, href, icon_class):
 def sidebar_style(is_open: bool):
     return {
         "width": "270px" if is_open else "0px",
-        "overflow": "hidden",
+        "overflow": "hidden" if not is_open else "visible",
         "transition": "width 0.18s ease",
         "borderRight": "1px solid #eee",
         "backgroundColor": "white",
-        "minHeight": "calc(100vh - 54px)",
         "flexShrink": 0,
+
+        # ✅ keep menu visible while scrolling
+        "position": "sticky",
+        "top": "54px",  # must match topbar height
+        "height": "calc(100vh - 54px)",
+        "overflowY": "auto",
     }
+
 
 
 app.layout = html.Div(
