@@ -1,12 +1,8 @@
 import importlib.util
 import subprocess
 import sys
-from dash import Dash, dcc, html, Input, Output, State
-import dash_bootstrap_components as dbc
-from pages import home, cost_function, data_simulator, rul_distribution, cost_sensitive_model, benchmark
-from pages.benchmark import DATA_ROWS, OUT_ROWS
 
-# Check for missing required packages and install them
+
 REQUIRED = {
     "dash": "dash",
     "plotly": "plotly",
@@ -33,6 +29,14 @@ if missing:
     if still_missing:
         print("❌ Still missing after install:", ", ".join(still_missing))
         raise SystemExit(1)
+
+from dash import Dash, dcc, html, Input, Output, State
+
+from pages import home, cost_function, data_simulator, rul_distribution, cost_sensitive_model, benchmark
+import dash_bootstrap_components as dbc
+
+from pages.benchmark import DATA_ROWS, OUT_ROWS
+
 
 # External stylesheets (including Font Awesome CDN)
 external_stylesheets = [
