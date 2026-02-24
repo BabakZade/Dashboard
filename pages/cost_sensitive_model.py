@@ -33,8 +33,72 @@ ASSETS_DIR = "assets"
 # -----------------------------
 # Shared styles
 # -----------------------------
-row_style = {"display": "flex", "gap": "5px", "alignItems": "center", "marginBottom": "8px"}
-box_style = {"padding": "5px", "border": "1px solid #ddd", "width": "60px", "textAlign": "center"}
+# --- Three-zone pill ( - | value | + ) ---
+pill_row_style = {
+    "display": "flex",
+    "alignItems": "center",
+    "gap": "10px",
+    "marginBottom": "10px",
+}
+
+pill_label_style = {
+    "width": "170px",
+    "whiteSpace": "nowrap",
+    "overflow": "hidden",
+    "textOverflow": "ellipsis",
+    "fontWeight": 600,
+}
+
+pill_wrap_style = {
+    "display": "flex",
+    "alignItems": "stretch",
+    "height": "34px",
+    "borderRadius": "999px",
+    "overflow": "hidden",
+    "border": "1px solid #ccc",
+    "backgroundColor": "#f3f4f6",
+}
+
+pill_btn_style = {
+    "width": "38px",
+    "border": "0px",
+    "backgroundColor": "transparent",
+    "cursor": "pointer",
+    "fontSize": "18px",
+    "lineHeight": "34px",
+    "padding": "0px",
+}
+
+pill_value_style = {
+    "minWidth": "56px",
+    "padding": "0 10px",
+    "display": "flex",
+    "alignItems": "center",
+    "justifyContent": "center",
+    "fontFamily": "monospace",
+    "borderLeft": "1px solid #d1d5db",
+    "borderRight": "1px solid #d1d5db",
+}
+
+def param_three_zone_pill(label: str, value_id: str, dec_id: str, inc_id: str, initial_value: int):
+    """
+    Label   ( - | value | + )   in ONE connected pill
+    """
+    return html.Div(
+        [
+            html.Div(label, style=pill_label_style),
+            html.Div(
+                [
+                    html.Button("−", id=dec_id, n_clicks=0, style=pill_btn_style),
+                    html.Div(id=value_id, children=initial_value, style=pill_value_style),
+                    html.Button("+", id=inc_id, n_clicks=0, style=pill_btn_style),
+                ],
+                style=pill_wrap_style,
+            ),
+        ],
+        style=pill_row_style,
+    )
+
 
 dropdown_style_hidden = {
     "display": "none",
@@ -330,56 +394,13 @@ def layout():
 
                                     html.Hr(style={"margin": "14px 0"}),
 
-                                    html.Label("Slice length (days):"),
-                                    html.Div(
-                                        [
-                                            html.Button("-", id="slice_window_decrease", n_clicks=0),
-                                            html.Div(id="slice_window_value", children=settings["slice_window"], style=box_style),
-                                            html.Button("+", id="slice_window_increase", n_clicks=0),
-                                        ],
-                                        style=row_style,
-                                    ),
-
-                                    html.Label("Early Penalty:"),
-                                    html.Div(
-                                        [
-                                            html.Button("-", id="early_penalty_decrease", n_clicks=0),
-                                            html.Div(id="early_penalty_value", children=settings["early_penalty"], style=box_style),
-                                            html.Button("+", id="early_penalty_increase", n_clicks=0),
-                                        ],
-                                        style=row_style,
-                                    ),
-
-                                    html.Label("Late Penalty:"),
-                                    html.Div(
-                                        [
-                                            html.Button("-", id="late_penalty_decrease", n_clicks=0),
-                                            html.Div(id="late_penalty_value", children=settings["late_penalty"], style=box_style),
-                                            html.Button("+", id="late_penalty_increase", n_clicks=0),
-                                        ],
-                                        style=row_style,
-                                    ),
-
-                                    html.Label("Reactive Cost:"),
-                                    html.Div(
-                                        [
-                                            html.Button("-", id="cost_reactive_decrease", n_clicks=0),
-                                            html.Div(id="cost_reactive_value", children=settings["cost_reactive"], style=box_style),
-                                            html.Button("+", id="cost_reactive_increase", n_clicks=0),
-                                        ],
-                                        style=row_style,
-                                    ),
-
-                                    html.Label("Predictive Cost:"),
-                                    html.Div(
-                                        [
-                                            html.Button("-", id="cost_predictive_decrease", n_clicks=0),
-                                            html.Div(id="cost_predictive_value", children=settings["cost_predictive"], style=box_style),
-                                            html.Button("+", id="cost_predictive_increase", n_clicks=0),
-                                        ],
-                                        style=row_style,
-                                    ),
-                                ],
+                                    # 
+                                    param_three_zone_pill("Slice length (days)", "slice_window_value", "slice_window_decrease", "slice_window_increase", settings["slice_window"]),
+                                    param_three_zone_pill("Early penalty", "early_penalty_value", "early_penalty_decrease", "early_penalty_increase", settings["early_penalty"]),
+                                    param_three_zone_pill("Late penalty", "late_penalty_value", "late_penalty_decrease", "late_penalty_increase", settings["late_penalty"]),
+                                    param_three_zone_pill("Reactive cost", "cost_reactive_value", "cost_reactive_decrease", "cost_reactive_increase", settings["cost_reactive"]),
+                                    param_three_zone_pill("Predictive cost", "cost_predictive_value", "cost_predictive_decrease", "cost_predictive_increase", settings["cost_predictive"]),
+                                    ],
                                 style={"width": "100%", "padding": "10px"},
                             )
                         ],
@@ -587,9 +608,6 @@ def register_callbacks(app):
         desired_path = assets_path / desired
         trig = ctx.triggered_id
 
-        # Default: keep sections hidden (only show placeholder)
-        hide_cards = (HIDDEN_STYLE, HIDDEN_STYLE, HIDDEN_STYLE, {"display": "block"})
-
         # ---------- Load/Train ----------
         if trig == "btn-select-model":
             if not dropdown_value:
@@ -599,8 +617,6 @@ def register_callbacks(app):
             chosen_path = assets_path / chosen_name
 
             if not chosen_path.exists():
-                # keep sections hidden, show error in placeholder
-                placeholder = html.Pre(f"Selected file does not exist:\n{chosen_name}")
                 return (
                     {"model_name": None, "source": "none", "match_percent": None},
                     "None selected",
