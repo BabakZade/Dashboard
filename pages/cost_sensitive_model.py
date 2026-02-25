@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import re
+import sys
+import os
 from pathlib import Path
+
+import joblib  # kept (you’ll enable later)
+import pandas as pd
+import numpy as np
 
 from dash import dcc, html, ctx, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 # --- import metrics (your current sys.path trick) ---
-import sys
-import os
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -29,11 +33,13 @@ settings = {
 }
 
 ASSETS_DIR = "assets"
+MODELS_DIR = "assets/costleap"
+VALIDATION_CSV = str(Path(ASSETS_DIR) / "validation.csv")
+
 
 # -----------------------------
 # Shared styles
 # -----------------------------
-# --- Three-zone pill ( - | value | + ) ---
 pill_row_style = {
     "display": "flex",
     "alignItems": "center",
@@ -81,9 +87,6 @@ pill_value_style = {
 }
 
 def param_three_zone_pill(label: str, value_id: str, dec_id: str, inc_id: str, initial_value: int):
-    """
-    Label   ( - | value | + )   in ONE connected pill
-    """
     return html.Div(
         [
             html.Div(label, style=pill_label_style),
@@ -116,7 +119,6 @@ dropdown_style_hidden = {
     "overflowY": "auto",
 }
 
-# main page card styles
 CARD_STYLE = {"border": "1px solid #ddd", "borderRadius": "10px", "padding": "12px", "marginBottom": "12px"}
 HIDDEN_STYLE = {"display": "none"}
 VISIBLE_CARD_STYLE = {**CARD_STYLE, "display": "block"}
@@ -208,8 +210,8 @@ def similarity_percent(target: dict, candidate: dict) -> float:
         den += w
     return num / den if den else 0.0
 
-def top_k_models(target: dict, assets_dir: str = ASSETS_DIR, k: int = 3) -> list[dict]:
-    assets_path = Path(assets_dir)
+def top_k_models(target: dict, model_dir: str = MODELS_DIR, k: int = 3) -> list[dict]:
+    assets_path = Path(model_dir)
     rows = []
     for p in assets_path.glob("*.pkl"):
         parsed = _parse_model_name(p.name)
@@ -222,23 +224,56 @@ def top_k_models(target: dict, assets_dir: str = ASSETS_DIR, k: int = 3) -> list
 
 
 # -----------------------------
-# Your hooks (replace with real ones)
+# Hooks
 # -----------------------------
+_MODEL_CACHE: dict[str, object] = {}
+
 def load_model(model_path: str):
-    # TODO: replace with joblib.load / pickle.load
-    return {"loaded_from": model_path}
+    """
+    TEMP: model loading disabled. Returns None always.
+    (kept for the pipeline UI: select -> load -> metrics -> graphs)
+    """
+    if model_path in _MODEL_CACHE:
+        return _MODEL_CACHE[model_path]
+    model = None
+    return model
 
 def train_new_model(target_settings: dict, save_to: str):
-    # TODO: must actually save a .pkl at save_to for real usage
+    """
+    TODO: replace with your real training.
+    MUST write a .pkl at save_to for real usage.
+    """
     return {"trained_for_pretty": format_settings_for_display(target_settings), "saved_to": save_to}
 
-# TODO: Replace with your real inference code.
-def get_predictions_and_truth(model, target_settings: dict):
-    return None, None
+def predict_rul_from_validation_csv(model, validation_csv_path: str):
+    """
+    DEMO:
+    - rul_true comes from column 'rul'
+    - rul_pred is randomly generated with the same length
+    """
+    p = Path(validation_csv_path)
+    if not p.exists():
+        raise FileNotFoundError(f"validation.csv not found at: {validation_csv_path}")
+
+    df = pd.read_csv(p)
+
+    if "rul" not in df.columns:
+        raise ValueError(
+            "validation.csv must contain a column named 'rul' for this demo. "
+            f"Found columns: {list(df.columns)[:40]}..."
+        )
+
+    y_true = df["rul"].to_numpy(dtype=float).reshape(-1)
+
+    rng = np.random.default_rng(42)
+    noise = rng.normal(loc=0.0, scale=max(np.std(y_true) * 0.15, 1.0), size=y_true.shape[0])
+    y_pred = np.clip(y_true + noise, a_min=0.0, a_max=None)
+
+    return y_true, y_pred
 
 
 # -----------------------------
-# UI rendering helpers for main page
+# UI rendering helpers
 # -----------------------------
 def render_metrics_section(metrics: dict | None):
     if not metrics:
@@ -271,7 +306,6 @@ def render_graphs_section(y_true, y_pred):
     if y_true is None or y_pred is None:
         return html.Div("No graphs available (no y_true/y_pred yet).", style={"opacity": 0.7})
 
-    import numpy as np
     import plotly.graph_objects as go
 
     yt = np.asarray(y_true, dtype=float).reshape(-1)
@@ -280,7 +314,14 @@ def render_graphs_section(y_true, y_pred):
 
     fig_scatter = go.Figure()
     fig_scatter.add_trace(go.Scatter(x=yt, y=yp, mode="markers", name="Pred vs True"))
-    fig_scatter.add_trace(go.Scatter(x=[float(yt.min()), float(yt.max())], y=[float(yt.min()), float(yt.max())], mode="lines", name="y=x"))
+    fig_scatter.add_trace(
+        go.Scatter(
+            x=[float(yt.min()), float(yt.max())],
+            y=[float(yt.min()), float(yt.max())],
+            mode="lines",
+            name="y=x",
+        )
+    )
     fig_scatter.update_layout(title="Predicted RUL vs True RUL", xaxis_title="True RUL", yaxis_title="Predicted RUL", height=360)
 
     fig_hist = go.Figure()
@@ -291,52 +332,44 @@ def render_graphs_section(y_true, y_pred):
 
 
 def build_main_page_layout():
-    """
-    IMPORTANT: All 3 sections start HIDDEN.
-    They become visible ONLY after user selects/trains a model.
-    """
     return html.Div(
         id="main-area",
         children=[
-            # Placeholder shown before selecting model
             html.Div(
                 id="main-placeholder",
                 children=html.Div(
                     [
                         html.H3("Main Dashboard"),
-                        html.Div("Select a model from Settings to show Loading/Training, Metrics, and Graphs.", style={"opacity": 0.8}),
+                        html.Div("Select a model from Settings to run: Select → Load → Metrics → Graphs.", style={"opacity": 0.8}),
                     ],
                     style={"border": "1px dashed #bbb", "borderRadius": "10px", "padding": "16px"},
                 ),
             ),
 
-            # Section 1 (hidden initially)
             html.Div(
                 id="card-loading-training",
                 style=HIDDEN_STYLE,
                 children=[
                     html.H3("1) Loading & Training"),
-                    html.Div(id="section-loading-training"),
+                    dcc.Loading(type="circle", children=html.Div(id="section-loading-training")),
                 ],
             ),
 
-            # Section 2 (hidden initially)
             html.Div(
                 id="card-metrics",
                 style=HIDDEN_STYLE,
                 children=[
                     html.H3("2) Metrics"),
-                    html.Div(id="section-metrics"),
+                    dcc.Loading(type="circle", children=html.Div(id="section-metrics")),
                 ],
             ),
 
-            # Section 3 (hidden initially)
             html.Div(
                 id="card-graphs",
                 style=HIDDEN_STYLE,
                 children=[
                     html.H3("3) Graphs"),
-                    html.Div(id="section-graphs"),
+                    dcc.Loading(type="circle", children=html.Div(id="section-graphs")),
                 ],
             ),
         ],
@@ -360,10 +393,8 @@ def layout():
     return html.Div(
         [
             dcc.Store(id="settings-store", data=settings),
-            dcc.Store(id="metrics-store", storage_type="session", data=None),
             dcc.Store(id="selected-model-store", data={"model_name": None, "source": "none", "match_percent": None}),
 
-            # Top-right gear + settings panel
             html.Div(
                 [
                     html.I(className="fa fa-cogs", id="gear-icon", style={"fontSize": "30px", "cursor": "pointer", "color": "black"}),
@@ -394,13 +425,12 @@ def layout():
 
                                     html.Hr(style={"margin": "14px 0"}),
 
-                                    # 
                                     param_three_zone_pill("Slice length (days)", "slice_window_value", "slice_window_decrease", "slice_window_increase", settings["slice_window"]),
                                     param_three_zone_pill("Early penalty", "early_penalty_value", "early_penalty_decrease", "early_penalty_increase", settings["early_penalty"]),
                                     param_three_zone_pill("Late penalty", "late_penalty_value", "late_penalty_decrease", "late_penalty_increase", settings["late_penalty"]),
                                     param_three_zone_pill("Reactive cost", "cost_reactive_value", "cost_reactive_decrease", "cost_reactive_increase", settings["cost_reactive"]),
                                     param_three_zone_pill("Predictive cost", "cost_predictive_value", "cost_predictive_decrease", "cost_predictive_increase", settings["cost_predictive"]),
-                                    ],
+                                ],
                                 style={"width": "100%", "padding": "10px"},
                             )
                         ],
@@ -410,7 +440,6 @@ def layout():
                 style={"position": "relative", "display": "flex", "justifyContent": "flex-end", "padding": "10px"},
             ),
 
-            # Click-catcher closes the panel
             html.Div(id="main-click-catcher", n_clicks=0, children=[build_main_page_layout()]),
         ]
     )
@@ -558,7 +587,7 @@ def register_callbacks(app):
             raise PreventUpdate
 
         desired = settings_slug(s)
-        assets_path = Path(ASSETS_DIR)
+        assets_path = Path(MODELS_DIR)
         desired_exists = (assets_path / desired).exists()
 
         options = []
@@ -569,9 +598,9 @@ def register_callbacks(app):
             default_value = desired
             status = html.Div("Exact model exists. Click 'Select model' to run it.", style={"color": "#0a7a0a"})
         else:
-            top3 = top_k_models(s, ASSETS_DIR, k=3)
+            top3 = top_k_models(s, MODELS_DIR, k=3)
             if not top3:
-                status = html.Div(f"Model not found and no matching models exist in {ASSETS_DIR}/.", style={"color": "#b00020"})
+                status = html.Div(f"Model not found and no matching models exist in {MODELS_DIR}/.", style={"color": "#b00020"})
             else:
                 status = html.Div("Exact model not found. Pick one of the closest models or train a new one.", style={"color": "#b00020"})
                 for row in top3:
@@ -581,11 +610,16 @@ def register_callbacks(app):
         return desired, status, options, default_value
 
 
-    # Select model / Train new model -> SHOW sections + fill them
+    # =========================================================
+    # ONE callback for the whole pipeline:
+    # Select/Train -> Load (skipped) -> Metrics -> Graphs
+    #
+    # - Load step is shown but returns None for now.
+    # - Metrics/Graphs use validation.csv 'rul' and demo rul_pred.
+    # =========================================================
     @app.callback(
         Output("selected-model-store", "data"),
         Output("selected-model-text", "children"),
-        Output("metrics-store", "data"),
         Output("section-loading-training", "children"),
         Output("section-metrics", "children"),
         Output("section-graphs", "children"),
@@ -599,16 +633,15 @@ def register_callbacks(app):
         State("model-dropdown", "value"),
         prevent_initial_call=True,
     )
-    def select_or_train(n_select, n_train, s, dropdown_value):
+    def run_full_pipeline(n_select, n_train, s, dropdown_value):
         if not s:
             raise PreventUpdate
 
-        assets_path = Path(ASSETS_DIR)
+        assets_path = Path(MODELS_DIR)
         desired = settings_slug(s)
         desired_path = assets_path / desired
         trig = ctx.triggered_id
 
-        # ---------- Load/Train ----------
         if trig == "btn-select-model":
             if not dropdown_value:
                 raise PreventUpdate
@@ -617,25 +650,23 @@ def register_callbacks(app):
             chosen_path = assets_path / chosen_name
 
             if not chosen_path.exists():
+                err = html.Div("Model file not found.", style={"color": "#b00020"})
                 return (
                     {"model_name": None, "source": "none", "match_percent": None},
                     "None selected",
-                    None,
-                    no_update,
-                    no_update,
-                    no_update,
-                    HIDDEN_STYLE,
-                    HIDDEN_STYLE,
-                    HIDDEN_STYLE,
-                    {"display": "block"},
+                    err,
+                    html.Div("No metrics.", style={"opacity": 0.7}),
+                    html.Div("No graphs.", style={"opacity": 0.7}),
+                    VISIBLE_CARD_STYLE,
+                    VISIBLE_CARD_STYLE,
+                    {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
+                    {"display": "none"},
                 )
-
-            model = load_model(str(chosen_path))
 
             if chosen_name == desired and desired_path.exists():
                 data = {"model_name": chosen_name, "source": "exact", "match_percent": 100.0}
             else:
-                top3 = top_k_models(s, ASSETS_DIR, k=3)
+                top3 = top_k_models(s, MODELS_DIR, k=3)
                 mp = None
                 for row in top3:
                     if row["name"] == chosen_name:
@@ -646,51 +677,55 @@ def register_callbacks(app):
             mp_text = "" if data["match_percent"] is None else f", {data['match_percent']:.1f}%"
             selected_text = f"{chosen_name} ({data['source']}{mp_text})"
 
+            model = load_model(str(chosen_path))  # None
+
             loading_ui = html.Pre(
-                f"Action: LOAD MODEL\n"
+                f"Step 1: SELECT MODEL ✅\n"
                 f"Model file: {chosen_name}\n"
                 f"Path: {chosen_path}\n"
                 f"Source: {data['source']}{mp_text}\n\n"
-                f"Settings:\n{format_settings_for_display(s)}"
+                f"Step 2: LOAD MODEL ⏭️ (skipped — loading disabled for demo)\n\n"
+                f"Settings:\n{format_settings_for_display(s)}",
+                style={"whiteSpace": "pre-wrap"},
             )
 
         elif trig == "btn-train-new":
             train_new_model(s, save_to=str(desired_path))
-            model = load_model(str(desired_path))
 
             data = {"model_name": desired, "source": "trained", "match_percent": 100.0}
             selected_text = f"{desired} (trained, 100.0%)"
 
+            model = load_model(str(desired_path))  # None
+
             loading_ui = html.Pre(
-                f"Action: TRAIN NEW MODEL\n"
-                f"Saved to: {desired_path}\n\n"
-                f"Settings:\n{format_settings_for_display(s)}"
+                f"Step 1: TRAIN NEW MODEL ✅ (placeholder)\n"
+                f"Would save to: {desired_path}\n\n"
+                f"Step 2: LOAD MODEL ⏭️ (skipped — loading disabled for demo)\n\n"
+                f"Settings:\n{format_settings_for_display(s)}",
+                style={"whiteSpace": "pre-wrap"},
             )
         else:
             raise PreventUpdate
 
-        # ---------- Predictions -> Metrics -> Graphs ----------
-        y_true, y_pred = get_predictions_and_truth(model, s)
+        # Step 3: predictions -> metrics (demo)
+        y_true, y_pred = predict_rul_from_validation_csv(model, VALIDATION_CSV)
 
-        metrics_dict = None
-        if y_true is not None and y_pred is not None:
-            metrics_dict = compute_all(
-                y_true=y_true,
-                y_pred=y_pred,
-                min_err=2.0,
-                max_err=10.0,
-                critical_true_lt=10.0,
-                cost_fn=None,  # put your real cost function here
-            )
-
+        metrics_dict = compute_all(
+            y_true=y_true,
+            y_pred=y_pred,
+            min_err=2.0,
+            max_err=10.0,
+            critical_true_lt=10.0,
+            cost_fn=None,
+        )
         metrics_ui = render_metrics_section(metrics_dict)
+
+        # Step 4: graphs
         graphs_ui = render_graphs_section(y_true, y_pred)
 
-        # SHOW all three cards; HIDE placeholder
         return (
             data,
             selected_text,
-            metrics_dict,
             loading_ui,
             metrics_ui,
             graphs_ui,

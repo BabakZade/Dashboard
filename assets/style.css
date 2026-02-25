@@ -71,3 +71,26 @@ a:hover {
 button:hover {
   background: var(--accent-soft) !important;
 }
+
+
+
+/* ===== Cost page responsive layout ===== */
+.p1-grid{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px; /* main + side */
+  gap: 16px;
+  align-items: start;
+}
+
+.p1-main{ min-width: 0; }
+.p1-side{ min-width: 0; }
+
+/* When narrow: stack, side goes bottom (because it's 2nd in DOM) */
+@media (max-width: 992px){
+  .p1-grid{
+    grid-template-columns: 1fr;
+  }
+  .p1-side{
+    width: 100%;
+  }
+}
