@@ -18,7 +18,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from core.metrics import compute_all
+from core.metrics import compute_all, metric_labels
+from pages.cost_function import nonlinear_cost
 
 
 # -----------------------------
@@ -111,7 +112,8 @@ dropdown_style_hidden = {
     "zIndex": "9999",
     "border": "1px solid #ddd",
     "backgroundColor": "white",
-    "minWidth": "380px",
+    "width": "380px",          # ✅ fixed width
+    "boxSizing": "border-box", # ✅ include padding in width
     "padding": "15px",
     "borderRadius": "8px",
     "boxShadow": "0 4px 12px rgba(0,0,0,0.15)",
@@ -255,7 +257,7 @@ def predict_rul_from_validation_csv(model, validation_csv_path: str):
     if not p.exists():
         raise FileNotFoundError(f"validation.csv not found at: {validation_csv_path}")
 
-    df = pd.read_csv(p)
+    df = pd.read_csv(p, sep = ";", decimal= ",")
 
     if "rul" not in df.columns:
         raise ValueError(
@@ -264,45 +266,192 @@ def predict_rul_from_validation_csv(model, validation_csv_path: str):
         )
 
     y_true = df["rul"].to_numpy(dtype=float).reshape(-1)
+    y_pred = df["y_pred"].to_numpy(dtype=float).reshape(-1)
 
-    rng = np.random.default_rng(42)
-    noise = rng.normal(loc=0.0, scale=max(np.std(y_true) * 0.15, 1.0), size=y_true.shape[0])
-    y_pred = np.clip(y_true + noise, a_min=0.0, a_max=None)
 
     return y_true, y_pred
 
 
+def make_cost_fn_from_settings(s: dict, *, leadtime: float):
+    """
+    Returns a function cost_fn(yt, yp) -> float for compute_all.
+    Uses the page settings 's' to fill nonlinear_cost params.
+    """
+    C_PR = float(s["cost_predictive"])   # predictive cost (early)
+    C_RE = float(s["cost_reactive"])     # reactive cost (late)
+    ALPHA = float(s["early_penalty"])
+    BETA  = float(s["late_penalty"])
+
+    def cost_fn(yt: np.ndarray, yp: np.ndarray) -> float:
+        yt = np.asarray(yt, dtype=float).reshape(-1)  # true
+        yp = np.asarray(yp, dtype=float).reshape(-1)  # pred
+        if yt.size != yp.size:
+            raise ValueError("y_true and y_pred must have the same length")
+
+        # per-sample costs, then average
+        costs = []
+        for t, p in zip(yt, yp):
+            costs.append(nonlinear_cost(p, t, leadtime, C_PR, ALPHA, C_RE, BETA))
+        return float(np.mean(costs))
+
+    return cost_fn
+
 # -----------------------------
 # UI rendering helpers
 # -----------------------------
+
 def render_metrics_section(metrics: dict | None):
     if not metrics:
         return html.Div("No metrics available (no y_true/y_pred yet).", style={"opacity": 0.7})
 
-    keys = [
-        "mse",
-        "cost",
-        "error_within_0_min_pct",
-        "error_within_min_max_pct",
-        "error_largerthan_max_pct",
-        "error_within_0_min_pct_critical",
-        "error_within_min_max_pct_critical",
-        "error_largerthan_max_pct_critical",
-    ]
+    # pull thresholds that compute_all already returns
+    min_err = float(metrics.get("min_err", 2.0))
+    max_err = float(metrics.get("max_err", 10.0))
+    crit_lt = float(metrics.get("critical_true_lt", 10.0))
+
+    labels = metric_labels(min_err, max_err, crit_lt)
 
     def fmt(v):
         if v is None:
             return "—"
         if isinstance(v, float):
-            return f"{v:.4f}"
+            return f"{v:.2f}"
         return str(v)
 
+    # ---------- styles ----------
+    legend_style = {
+        "display": "flex",
+        "gap": "14px",
+        "alignItems": "center",
+        "fontSize": "12px",
+        "opacity": 0.85,
+        "marginBottom": "10px",
+    }
+    legend_item_style = {"display": "flex", "alignItems": "center", "gap": "6px"}
+    swatch_dark = {"width": "12px", "height": "12px", "borderRadius": "2px", "backgroundColor": "#111827"}  # dark
+    swatch_light = {"width": "12px", "height": "12px", "borderRadius": "2px", "backgroundColor": "#E5E7EB", "border": "1px solid #D1D5DB"}  # light
+
+    row_style = {"marginBottom": "10px"}
+    title_row_style = {"display": "flex", "justifyContent": "space-between", "gap": "10px", "fontSize": "13px"}
+    label_style = {"fontWeight": 600, "flex": "1 1 auto", "minWidth": "0px"}
+    value_style = {"fontFamily": "monospace", "whiteSpace": "nowrap", "flex": "0 0 auto"}
+
+    bar_outer = {
+        "marginTop": "6px",
+        "height": "12px",
+        "borderRadius": "999px",
+        "backgroundColor": "#F3F4F6",
+        "border": "1px solid #E5E7EB",
+        "overflow": "hidden",
+        "display": "flex",
+    }
+    bar_dark = {"height": "100%", "backgroundColor": "#111827"}   # conservative
+    bar_light = {"height": "100%", "backgroundColor": "#E5E7EB"}  # other
+
+    section_title_style = {"marginTop": "8px", "marginBottom": "6px", "fontSize": "12px", "fontWeight": 700, "opacity": 0.9}
+
+    # ---------- helper to render one stacked KPI row ----------
+    def stacked_kpi_row(label_key: str, total_key: str, cons_key: str):
+        total = metrics.get(total_key)
+        cons = metrics.get(cons_key)
+
+        # handle Nones
+        if total is None or cons is None:
+            return html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Span(labels.get(label_key, label_key), style=label_style),
+                            html.Span(": —", style=value_style),
+                        ],
+                        style=title_row_style,
+                    )
+                ],
+                style=row_style,
+            )
+
+        # clamp for safety
+        total_f = float(total)
+        cons_f = float(cons)
+        total_f = max(0.0, min(100.0, total_f))
+        cons_f = max(0.0, min(total_f, cons_f))
+        other_f = max(0.0, total_f - cons_f)
+
+        # widths as % of 100 (not of "total") so bar shows absolute prevalence
+        cons_w = f"{cons_f:.4f}%"
+        other_w = f"{other_f:.4f}%"
+
+        return html.Div(
+            [
+                html.Div(
+                    [
+                        html.Span(labels.get(label_key, label_key), style=label_style),
+                        html.Span(f": {total_f:.2f}%", style=value_style),
+                    ],
+                    style=title_row_style,
+                ),
+                html.Div(
+                    [
+                        html.Div(style={**bar_dark, "width": cons_w}),
+                        html.Div(style={**bar_light, "width": other_w}),
+                    ],
+                    style=bar_outer,
+                    title=f"Conservative: {cons_f:.2f}% | Other: {other_f:.2f}% (Total: {total_f:.2f}%)",
+                ),
+                html.Div(
+                    f"Conservative (err ≤ 0): {cons_f:.2f}%   |   Other (err > 0): {other_f:.2f}%",
+                    style={"fontSize": "12px", "opacity": 0.8, "marginTop": "4px"},
+                ),
+            ],
+            style=row_style,
+        )
+
+    # ---------- render ----------
     return html.Div(
-        [html.Div([html.Span(k, style={"fontWeight": 600}), html.Span(f": {fmt(metrics.get(k))}")]) for k in keys],
-        style={"fontFamily": "monospace", "fontSize": "12px", "lineHeight": "1.8"},
+        [
+            html.Div(
+                f"Thresholds: ε1={min_err:g}, ε2={max_err:g} | Critical: true RUL < {crit_lt:g}",
+                style={"opacity": 0.75, "marginBottom": "8px", "fontSize": "12px"},
+            ),
+
+            # Legend (once)
+            html.Div(
+                [
+                    html.Div([html.Div(style=swatch_dark), html.Span("Conservative (err ≤ 0)")], style=legend_item_style),
+                    html.Div([html.Div(style=swatch_light), html.Span("Other (err > 0)")], style=legend_item_style),
+                ],
+                style=legend_style,
+            ),
+
+            # MSE + Cost (text)
+            html.Div(
+                [
+                    html.Div(
+                        [html.Span(labels.get("mse", "mse"), style={"fontWeight": 600}), html.Span(f": {fmt(metrics.get('mse'))}")],
+                        style={"marginBottom": "6px", "fontSize": "13px"},
+                    ),
+                    html.Div(
+                        [html.Span(labels.get("cost", "cost"), style={"fontWeight": 600}), html.Span(f": {fmt(metrics.get('cost'))}")],
+                        style={"marginBottom": "10px", "fontSize": "13px"},
+                    ),
+                ]
+            ),
+
+            # Overall section
+            html.Div("Overall", style=section_title_style),
+            stacked_kpi_row("error_within_0_min_pct", "error_within_0_min_pct", "error_within_0_min_pct_neg"),
+            stacked_kpi_row("error_within_min_max_pct", "error_within_min_max_pct", "error_within_min_max_pct_neg"),
+            stacked_kpi_row("error_largerthan_max_pct", "error_largerthan_max_pct", "error_largerthan_max_pct_neg"),
+
+            # Critical section
+            html.Div("Critical subset (true < threshold)", style=section_title_style),
+            stacked_kpi_row("error_within_0_min_pct_critical", "error_within_0_min_pct_critical", "error_within_0_min_pct_critical_neg"),
+            stacked_kpi_row("error_within_min_max_pct_critical", "error_within_min_max_pct_critical", "error_within_min_max_pct_critical_neg"),
+            stacked_kpi_row("error_largerthan_max_pct_critical", "error_largerthan_max_pct_critical", "error_largerthan_max_pct_critical_neg"),
+        ]
     )
 
-def render_graphs_section(y_true, y_pred):
+def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: float):
     if y_true is None or y_pred is None:
         return html.Div("No graphs available (no y_true/y_pred yet).", style={"opacity": 0.7})
 
@@ -312,23 +461,211 @@ def render_graphs_section(y_true, y_pred):
     yp = np.asarray(y_pred, dtype=float).reshape(-1)
     err = yp - yt
 
+    # -------------------------
+    # 1) Pred vs True (binned mean, LINE ONLY)
+    # -------------------------
+    bins = 25  # tweak as needed
+    yt_min = float(np.nanmin(yt))
+    yt_max = float(np.nanmax(yt))
+    edges = np.linspace(yt_min, yt_max, bins + 1)
+    bin_ids = np.digitize(yt, edges) - 1  # 0..bins-1
+
+    x_centers = (edges[:-1] + edges[1:]) / 2.0
+    mean_pred = np.full(bins, np.nan)
+
+    for b in range(bins):
+        m = bin_ids == b
+        if np.any(m):
+            mean_pred[b] = float(np.mean(yp[m]))
+
+    valid = np.isfinite(mean_pred)
+    x_plot = x_centers[valid]
+    y_plot = mean_pred[valid]
+
     fig_scatter = go.Figure()
-    fig_scatter.add_trace(go.Scatter(x=yt, y=yp, mode="markers", name="Pred vs True"))
     fig_scatter.add_trace(
         go.Scatter(
-            x=[float(yt.min()), float(yt.max())],
-            y=[float(yt.min()), float(yt.max())],
-            mode="lines",
-            name="y=x",
+            x=x_plot,
+            y=y_plot,
+            mode="lines",           # ✅ line only (no markers)
+            name="Mean(pred) per true-bin",
         )
     )
-    fig_scatter.update_layout(title="Predicted RUL vs True RUL", xaxis_title="True RUL", yaxis_title="Predicted RUL", height=360)
 
+    # y=x reference line
+    mn = float(np.nanmin(x_plot)) if x_plot.size else yt_min
+    mx = float(np.nanmax(x_plot)) if x_plot.size else yt_max
+    fig_scatter.add_trace(go.Scatter(x=[mn, mx], y=[mn, mx], mode="lines", name="y=x"))
+
+    fig_scatter.update_layout(
+        title="Predicted RUL vs True RUL (binned mean)",
+        xaxis_title="True RUL (bin center)",
+        yaxis_title="Mean predicted RUL",
+        height=340,
+        margin=dict(l=40, r=20, t=50, b=40),
+    )
+    # -------------------------
+    # 2) Error distribution
+    # -------------------------
     fig_hist = go.Figure()
     fig_hist.add_trace(go.Histogram(x=err, name="Error (pred-true)"))
-    fig_hist.update_layout(title="Prediction Error Distribution", xaxis_title="Error (pred-true)", yaxis_title="Count", height=360)
+    fig_hist.update_layout(
+        title="Prediction Error Distribution",
+        xaxis_title="Error (pred - true)",
+        yaxis_title="Count",
+        height=340,
+        margin=dict(l=40, r=20, t=50, b=40),
+    )
 
-    return html.Div([dcc.Graph(figure=fig_scatter), dcc.Graph(figure=fig_hist)])
+    # -------------------------
+    # 3) Error vs True RUL (binned mean, LINE ONLY — like graph 1)
+    # -------------------------
+    bins = 25  # keep same as graph 1 for consistency
+    yt_min = float(np.nanmin(yt))
+    yt_max = float(np.nanmax(yt))
+    edges = np.linspace(yt_min, yt_max, bins + 1)
+    bin_ids = np.digitize(yt, edges) - 1  # 0..bins-1
+
+    x_centers = (edges[:-1] + edges[1:]) / 2.0
+    mean_err = np.full(bins, np.nan)
+
+    for b in range(bins):
+        m = bin_ids == b
+        if np.any(m):
+            mean_err[b] = float(np.mean(err[m]))
+
+    valid = np.isfinite(mean_err)
+    x_plot = x_centers[valid]
+    y_plot = mean_err[valid]
+
+    fig_err_vs_true = go.Figure()
+    fig_err_vs_true.add_trace(
+        go.Scatter(
+            x=x_plot,
+            y=y_plot,
+            mode="lines",  # ✅ no markers
+            name="Mean(err) per true-bin",
+        )
+    )
+    fig_err_vs_true.add_hline(y=0, line_dash="dash")
+    fig_err_vs_true.update_layout(
+        title="Signed Error vs True RUL (binned mean)",
+        xaxis_title="True RUL (bin center)",
+        yaxis_title="Mean error (pred - true)",
+        height=340,
+        margin=dict(l=40, r=20, t=50, b=40),
+    )
+
+    # -------------------------
+    # -------------------------
+    # 4) Cost curve for ONE record (random pick) — COST ONLY
+    #    + colored vertical lines with legend on the right
+    # -------------------------
+    i = int(np.random.randint(0, yt.size))
+    t_i = float(yt[i])
+    p_i = float(yp[i])
+
+    # cost params from settings
+    C_PR = float(s["cost_predictive"])
+    C_RE = float(s["cost_reactive"])
+    ALPHA = float(s["early_penalty"])
+    BETA = float(s["late_penalty"])
+
+    # x-grid for predicted RUL in the cost curve
+    x_max = float(max(200.0, np.nanmax(yt), np.nanmax(yp), thresh * 2))
+    x_grid = np.linspace(0.0, x_max, 600)
+
+    # per-record cost curve
+    costs = np.array([nonlinear_cost(p, t_i, leadtime, C_PR, ALPHA, C_RE, BETA) for p in x_grid], dtype=float)
+
+    # a "random prediction" baseline point (uniform over range)
+    rand_p = float(np.random.uniform(0.0, x_max))
+    rand_cost = float(nonlinear_cost(rand_p, t_i, leadtime, C_PR, ALPHA, C_RE, BETA))
+    pred_cost = float(nonlinear_cost(p_i, t_i, leadtime, C_PR, ALPHA, C_RE, BETA))
+
+    y_min = float(np.nanmin(costs))
+    y_max = float(np.nanmax(costs))
+
+    fig_cost = go.Figure()
+
+    # cost curve
+    fig_cost.add_trace(go.Scatter(x=x_grid, y=costs, mode="lines", name="Cost"))
+
+    # markers for selected pred + random pred
+    fig_cost.add_trace(go.Scatter(x=[p_i], y=[pred_cost], mode="markers", name=f"Pred cost = {pred_cost:.1f}"))
+    fig_cost.add_trace(go.Scatter(x=[rand_p], y=[rand_cost], mode="markers", name=f"Random cost = {rand_cost:.1f}"))
+
+    # --- vertical lines as traces so they appear in legend ---
+    fig_cost.add_trace(
+        go.Scatter(
+            x=[p_i, p_i],
+            y=[y_min, y_max],
+            mode="lines",
+            name=f"Pred = {p_i:.1f}",
+            line=dict(width=2, dash="dash", color="#1f77b4"),
+            hoverinfo="skip",
+        )
+    )
+    fig_cost.add_trace(
+        go.Scatter(
+            x=[t_i, t_i],
+            y=[y_min, y_max],
+            mode="lines",
+            name=f"True = {t_i:.1f}",
+            line=dict(width=2, dash="dash", color="#2ca02c"),
+            hoverinfo="skip",
+        )
+    )
+    fig_cost.add_trace(
+        go.Scatter(
+            x=[float(thresh), float(thresh)],
+            y=[y_min, y_max],
+            mode="lines",
+            name=f"Thresh = {thresh:g}",
+            line=dict(width=2, dash="dash", color="#d62728"),
+            hoverinfo="skip",
+        )
+    )
+
+    fig_cost.update_layout(
+        title=f"Cost curve (Tr={t_i:.1f}, Pr={p_i:.1f}, LT={leadtime:g})",
+        xaxis_title="Predicted RUL",
+        yaxis_title="Cost",
+        height=340,
+        margin=dict(l=40, r=160, t=50, b=40),  # extra right margin for legend
+        legend=dict(
+            orientation="v",
+            x=1.02,
+            xanchor="left",
+            y=1.0,
+            yanchor="top",
+        ),
+    )
+
+    # -------------------------
+    # Responsive 2x2 grid
+    # - wide: 2 columns
+    # - tiny: 1 column
+    # -------------------------
+    cell_style = {
+        "flex": "1 1 480px",      # grows; wraps if narrow
+        "minWidth": "320px",      # prevents too tiny
+    }
+    grid_style = {
+        "display": "flex",
+        "flexWrap": "wrap",
+        "gap": "12px",
+    }
+
+    return html.Div(
+        [
+            html.Div(dcc.Graph(figure=fig_scatter, config={"displayModeBar": False}), style=cell_style),
+            html.Div(dcc.Graph(figure=fig_err_vs_true, config={"displayModeBar": False}), style=cell_style),
+            html.Div(dcc.Graph(figure=fig_hist, config={"displayModeBar": False}), style=cell_style),
+            html.Div(dcc.Graph(figure=fig_cost, config={"displayModeBar": False}), style=cell_style),
+        ],
+        style=grid_style,
+    )
 
 
 def build_main_page_layout():
@@ -339,8 +676,8 @@ def build_main_page_layout():
                 id="main-placeholder",
                 children=html.Div(
                     [
-                        html.H3("Main Dashboard"),
-                        html.Div("Select a model from Settings to run: Select → Load → Metrics → Graphs.", style={"opacity": 0.8}),
+                        html.H3("Cost sensitive model"),
+                        html.Div("Select a model from Settings to run: Select → Load → Metrics → Plots.", style={"opacity": 0.8}),
                     ],
                     style={"border": "1px dashed #bbb", "borderRadius": "10px", "padding": "16px"},
                 ),
@@ -350,7 +687,7 @@ def build_main_page_layout():
                 id="card-loading-training",
                 style=HIDDEN_STYLE,
                 children=[
-                    html.H3("1) Loading & Training"),
+                    html.H3("Model Overview"),
                     dcc.Loading(type="circle", children=html.Div(id="section-loading-training")),
                 ],
             ),
@@ -359,7 +696,7 @@ def build_main_page_layout():
                 id="card-metrics",
                 style=HIDDEN_STYLE,
                 children=[
-                    html.H3("2) Metrics"),
+                    html.H3("Performance KPIs"),
                     dcc.Loading(type="circle", children=html.Div(id="section-metrics")),
                 ],
             ),
@@ -368,7 +705,7 @@ def build_main_page_layout():
                 id="card-graphs",
                 style=HIDDEN_STYLE,
                 children=[
-                    html.H3("3) Graphs"),
+                    html.H3("Diagnostics & Plots"),
                     dcc.Loading(type="circle", children=html.Div(id="section-graphs")),
                 ],
             ),
@@ -492,12 +829,15 @@ def register_callbacks(app):
         trig = ctx.triggered_id
         is_open_now = _is_open(current_style)
 
+        # Gear toggles open/close (same as old)
         if trig == "gear-icon":
             return dropdown_style_hidden if is_open_now else _open_style()
 
-        if is_open_now:
+        # If open, ONLY close on outside click or after select/train
+        if is_open_now and trig in ("main-click-catcher", "btn-select-model", "btn-train-new"):
             return dropdown_style_hidden
 
+        # Otherwise keep it as-is (so +/- won't close it)
         return no_update
 
 
@@ -710,19 +1050,27 @@ def register_callbacks(app):
         # Step 3: predictions -> metrics (demo)
         y_true, y_pred = predict_rul_from_validation_csv(model, VALIDATION_CSV)
 
+        leadtime = float(s["slice_window"])  #
+        cost_fn = make_cost_fn_from_settings(s, leadtime=leadtime)
+
         metrics_dict = compute_all(
             y_true=y_true,
             y_pred=y_pred,
-            min_err=2.0,
-            max_err=10.0,
+            min_err=leadtime,
+            max_err=3 * leadtime,
             critical_true_lt=10.0,
-            cost_fn=None,
+            cost_fn=cost_fn,
         )
         metrics_ui = render_metrics_section(metrics_dict)
 
         # Step 4: graphs
-        graphs_ui = render_graphs_section(y_true, y_pred)
-
+        graphs_ui = render_graphs_section(
+            y_true,
+            y_pred,
+            s=s,
+            leadtime=leadtime,
+            thresh= 10 * leadtime,  # same as max_err you used in compute_all
+        )
         return (
             data,
             selected_text,
