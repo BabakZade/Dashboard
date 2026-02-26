@@ -1,0 +1,11 @@
+arviz
+dash
+jax
+jaxlib
+matplotlib
+nutpie
+pandas
+plotly
+pyarrow
+pymc
+scikit-learn
