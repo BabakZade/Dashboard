@@ -8,6 +8,7 @@ REQUIRED = {
     "plotly": "plotly",
     "numpy": "numpy",
     "dash_bootstrap_components": "dash-bootstrap-components",
+    "arviz" : "arviz"
 }
 
 missing = [mod for mod in REQUIRED if importlib.util.find_spec(mod) is None]
