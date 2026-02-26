@@ -239,7 +239,7 @@ def layout():
                     style={"marginRight": "8px"},
                 ),
                 html.Code(
-                    "/home/lavinius.ioangliga/Projects/CostLeap/venv/bin/python "
+                    "/home/lavinius.ioangliga/Projects/Dashboard/venv/bin/python "
                     "scripts/fit_model.py",
                     style={"fontSize": "0.85em", "background": "#f5f5f5", "padding": "2px 6px"},
                 ),

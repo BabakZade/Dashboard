@@ -1,10 +1,5 @@
 """Offline model fitting script.
 
-Run once with the CostLeap venv (which has PyMC + nutpie + JAX):
-
-    /home/lavinius.ioangliga/Projects/CostLeap/venv/bin/python \
-        /home/lavinius.ioangliga/Projects/Dashboard/scripts/fit_model.py
-
 Outputs written to assets/:
     model_trace.nc   – ArviZ InferenceData (NetCDF4)
     scalers.npz      – scaler mean/scale arrays (no scikit-learn needed to load)
@@ -13,11 +8,9 @@ Outputs written to assets/:
 import pathlib
 import sys
 
-# Allow importing from Dashboard root and CostLeap project
+# Allow importing from Dashboard root
 DASHBOARD_ROOT = pathlib.Path(__file__).parent.parent
-KOSTLEAP_ROOT = pathlib.Path("/home/lavinius.ioangliga/Projects/CostLeap/KULData")
 sys.path.insert(0, str(DASHBOARD_ROOT))
-sys.path.insert(0, str(KOSTLEAP_ROOT.parent))   # so "KULData.create_dset" works
 
 import arviz as az
 import numpy as np
@@ -26,10 +19,9 @@ import pymc as pm
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from KULData.create_dset import (
+from create_dset import (
     create_dset,
     build_survival_dataset,
-    FAILURE_TYPES,
 )
 
 ASSETS = DASHBOARD_ROOT / "assets"
