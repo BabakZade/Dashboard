@@ -8,6 +8,9 @@ from pathlib import Path
 import joblib  # kept (you’ll enable later)
 import pandas as pd
 import numpy as np
+import uuid
+import traceback
+
 
 from dash import dcc, html, ctx, no_update
 from dash.dependencies import Input, Output, State
@@ -304,152 +307,92 @@ def render_metrics_section(metrics: dict | None):
     if not metrics:
         return html.Div("No metrics available (no y_true/y_pred yet).", style={"opacity": 0.7})
 
-    # pull thresholds that compute_all already returns
-    min_err = float(metrics.get("min_err", 2.0))
-    max_err = float(metrics.get("max_err", 10.0))
-    crit_lt = float(metrics.get("critical_true_lt", 10.0))
-
-    labels = metric_labels(min_err, max_err, crit_lt)
-
-    def fmt(v):
+    # helpers
+    def fmt_num(v):
         if v is None:
             return "—"
-        if isinstance(v, float):
-            return f"{v:.2f}"
-        return str(v)
+        try:
+            return f"{float(v):.2f}"
+        except Exception:
+            return str(v)
 
-    # ---------- styles ----------
-    legend_style = {
-        "display": "flex",
-        "gap": "14px",
-        "alignItems": "center",
-        "fontSize": "12px",
-        "opacity": 0.85,
-        "marginBottom": "10px",
+    def fmt_pct(v):
+        if v is None:
+            return "—"
+        return f"{float(v):.1f}%"
+
+    def get_pct(key):
+        v = metrics.get(key)
+        return None if v is None else float(v)
+
+    # core numbers
+    mse = metrics.get("mse")
+    cost = metrics.get("cost")
+
+    overall_acc = get_pct("error_within_0_min_pct")
+    overall_cons = get_pct("error_within_0_min_pct_neg")
+    overall_other = None if (overall_acc is None or overall_cons is None) else max(0.0, overall_acc - overall_cons)
+
+    crit_acc = get_pct("error_within_0_min_pct_critical")
+
+    # thresholds (optional small caption)
+    min_err = float(metrics.get("min_err", 2.0))
+    max_err = float(metrics.get("max_err", 14.0))
+    crit_lt = float(metrics.get("critical_true_lt", 10.0))
+
+    # styles
+    grid_style = {
+        "display": "grid",
+        "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
+        "gap": "12px",
     }
-    legend_item_style = {"display": "flex", "alignItems": "center", "gap": "6px"}
-    swatch_dark = {"width": "12px", "height": "12px", "borderRadius": "2px", "backgroundColor": "#111827"}  # dark
-    swatch_light = {"width": "12px", "height": "12px", "borderRadius": "2px", "backgroundColor": "#E5E7EB", "border": "1px solid #D1D5DB"}  # light
-
-    row_style = {"marginBottom": "10px"}
-    title_row_style = {"display": "flex", "justifyContent": "space-between", "gap": "10px", "fontSize": "13px"}
-    label_style = {"fontWeight": 600, "flex": "1 1 auto", "minWidth": "0px"}
-    value_style = {"fontFamily": "monospace", "whiteSpace": "nowrap", "flex": "0 0 auto"}
-
-    bar_outer = {
-        "marginTop": "6px",
-        "height": "12px",
-        "borderRadius": "999px",
-        "backgroundColor": "#F3F4F6",
+    card_style = {
         "border": "1px solid #E5E7EB",
-        "overflow": "hidden",
-        "display": "flex",
+        "borderRadius": "14px",
+        "padding": "12px 14px",
+        "backgroundColor": "white",
     }
-    bar_dark = {"height": "100%", "backgroundColor": "#111827"}   # conservative
-    bar_light = {"height": "100%", "backgroundColor": "#E5E7EB"}  # other
+    label_style = {"fontSize": "12px", "opacity": 0.75, "marginBottom": "6px"}
+    value_style = {"fontSize": "24px", "fontWeight": 800, "lineHeight": "1.1"}
+    sub_style = {"fontSize": "12px", "opacity": 0.8, "marginTop": "8px"}
 
-    section_title_style = {"marginTop": "8px", "marginBottom": "6px", "fontSize": "12px", "fontWeight": 700, "opacity": 0.9}
-
-    # ---------- helper to render one stacked KPI row ----------
-    def stacked_kpi_row(label_key: str, total_key: str, cons_key: str):
-        total = metrics.get(total_key)
-        cons = metrics.get(cons_key)
-
-        # handle Nones
-        if total is None or cons is None:
-            return html.Div(
-                [
-                    html.Div(
-                        [
-                            html.Span(labels.get(label_key, label_key), style=label_style),
-                            html.Span(": —", style=value_style),
-                        ],
-                        style=title_row_style,
-                    )
-                ],
-                style=row_style,
-            )
-
-        # clamp for safety
-        total_f = float(total)
-        cons_f = float(cons)
-        total_f = max(0.0, min(100.0, total_f))
-        cons_f = max(0.0, min(total_f, cons_f))
-        other_f = max(0.0, total_f - cons_f)
-
-        # widths as % of 100 (not of "total") so bar shows absolute prevalence
-        cons_w = f"{cons_f:.4f}%"
-        other_w = f"{other_f:.4f}%"
-
+    def card(title, value, sub=None):
         return html.Div(
             [
-                html.Div(
-                    [
-                        html.Span(labels.get(label_key, label_key), style=label_style),
-                        html.Span(f": {total_f:.2f}%", style=value_style),
-                    ],
-                    style=title_row_style,
-                ),
-                html.Div(
-                    [
-                        html.Div(style={**bar_dark, "width": cons_w}),
-                        html.Div(style={**bar_light, "width": other_w}),
-                    ],
-                    style=bar_outer,
-                    title=f"Conservative: {cons_f:.2f}% | Other: {other_f:.2f}% (Total: {total_f:.2f}%)",
-                ),
-                html.Div(
-                    f"Conservative (err ≤ 0): {cons_f:.2f}%   |   Other (err > 0): {other_f:.2f}%",
-                    style={"fontSize": "12px", "opacity": 0.8, "marginTop": "4px"},
-                ),
+                html.Div(title, style=label_style),
+                html.Div(value, style=value_style),
+                html.Div(sub, style=sub_style) if sub else None,
             ],
-            style=row_style,
+            style=card_style,
         )
 
-    # ---------- render ----------
     return html.Div(
         [
             html.Div(
-                f"Thresholds: ε1={min_err:g}, ε2={max_err:g} | Critical: true RUL < {crit_lt:g}",
-                style={"opacity": 0.75, "marginBottom": "8px", "fontSize": "12px"},
+                f"Thresholds: ε1={min_err:g}, ε2={max_err:g} | Critical subset: true RUL < {crit_lt:g}",
+                style={"fontSize": "12px", "opacity": 0.7, "marginBottom": "10px"},
             ),
 
-            # Legend (once)
             html.Div(
                 [
-                    html.Div([html.Div(style=swatch_dark), html.Span("Conservative (err ≤ 0)")], style=legend_item_style),
-                    html.Div([html.Div(style=swatch_light), html.Span("Other (err > 0)")], style=legend_item_style),
+                    card("MSE (days²)", fmt_num(mse)),
+                    card("Mean cost", fmt_num(cost)),
+                    card(
+                        f"Overall accuracy (|err| ≤ {min_err})",
+                        fmt_pct(overall_acc),
+                        sub=f"Conservative (err ≤ 0): {fmt_pct(overall_cons)}",
+                    ),
+                    card(
+                        "Critical accuracy",
+                        fmt_pct(crit_acc),
+                        sub=f"Accuracy on high-risk cases (true < {min_err})",
+                    ),
                 ],
-                style=legend_style,
+                style=grid_style,
             ),
-
-            # MSE + Cost (text)
-            html.Div(
-                [
-                    html.Div(
-                        [html.Span(labels.get("mse", "mse"), style={"fontWeight": 600}), html.Span(f": {fmt(metrics.get('mse'))}")],
-                        style={"marginBottom": "6px", "fontSize": "13px"},
-                    ),
-                    html.Div(
-                        [html.Span(labels.get("cost", "cost"), style={"fontWeight": 600}), html.Span(f": {fmt(metrics.get('cost'))}")],
-                        style={"marginBottom": "10px", "fontSize": "13px"},
-                    ),
-                ]
-            ),
-
-            # Overall section
-            html.Div("Overall", style=section_title_style),
-            stacked_kpi_row("error_within_0_min_pct", "error_within_0_min_pct", "error_within_0_min_pct_neg"),
-            stacked_kpi_row("error_within_min_max_pct", "error_within_min_max_pct", "error_within_min_max_pct_neg"),
-            stacked_kpi_row("error_largerthan_max_pct", "error_largerthan_max_pct", "error_largerthan_max_pct_neg"),
-
-            # Critical section
-            html.Div("Critical subset (true < threshold)", style=section_title_style),
-            stacked_kpi_row("error_within_0_min_pct_critical", "error_within_0_min_pct_critical", "error_within_0_min_pct_critical_neg"),
-            stacked_kpi_row("error_within_min_max_pct_critical", "error_within_min_max_pct_critical", "error_within_min_max_pct_critical_neg"),
-            stacked_kpi_row("error_largerthan_max_pct_critical", "error_largerthan_max_pct_critical", "error_largerthan_max_pct_critical_neg"),
         ]
     )
+
 
 def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: float):
     if y_true is None or y_pred is None:
@@ -561,10 +504,25 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
     # 4) Cost curve for ONE record (random pick) — COST ONLY
     #    + colored vertical lines with legend on the right
     # -------------------------
-    i = int(np.random.randint(0, yt.size))
+    yt = np.asarray(y_true, dtype=float).reshape(-1)
+    yp = np.asarray(y_pred, dtype=float).reshape(-1)
+
+    diff = yt - yp  # positive => pred < true
+    good_idx = np.where((diff > 0) & (diff < 10))[0]
+
+    if good_idx.size > 0:
+        i = int(np.random.choice(good_idx))
+    else:
+        # fallback: pick the closest under-pred record (diff > 0 with minimal diff)
+        under_idx = np.where(diff > 0)[0]
+        if under_idx.size > 0:
+            i = int(under_idx[np.argmin(diff[under_idx])])
+        else:
+            # last fallback: truly random
+            i = int(np.random.randint(0, yt.size))
+
     t_i = float(yt[i])
     p_i = float(yp[i])
-
     # cost params from settings
     C_PR = float(s["cost_predictive"])
     C_RE = float(s["cost_reactive"])
@@ -593,7 +551,6 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
 
     # markers for selected pred + random pred
     fig_cost.add_trace(go.Scatter(x=[p_i], y=[pred_cost], mode="markers", name=f"Pred cost = {pred_cost:.1f}"))
-    fig_cost.add_trace(go.Scatter(x=[rand_p], y=[rand_cost], mode="markers", name=f"Random cost = {rand_cost:.1f}"))
 
     # --- vertical lines as traces so they appear in legend ---
     fig_cost.add_trace(
@@ -616,19 +573,9 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
             hoverinfo="skip",
         )
     )
-    fig_cost.add_trace(
-        go.Scatter(
-            x=[float(thresh), float(thresh)],
-            y=[y_min, y_max],
-            mode="lines",
-            name=f"Thresh = {thresh:g}",
-            line=dict(width=2, dash="dash", color="#d62728"),
-            hoverinfo="skip",
-        )
-    )
 
     fig_cost.update_layout(
-        title=f"Cost curve (Tr={t_i:.1f}, Pr={p_i:.1f}, LT={leadtime:g})",
+        title=f"Cost curve (True value ={t_i:.1f}, Prediciton ={p_i:.1f})",
         xaxis_title="Predicted RUL",
         yaxis_title="Cost",
         height=340,
@@ -731,6 +678,10 @@ def layout():
         [
             dcc.Store(id="settings-store", data=settings),
             dcc.Store(id="selected-model-store", data={"model_name": None, "source": "none", "match_percent": None}),
+            
+            # inside layout() children list, near your existing stores:
+            dcc.Store(id="run-token", data=None),          # triggers a run
+            dcc.Store(id="pred-store", data=None),         # stores y_true/y_pred
 
             html.Div(
                 [
@@ -960,20 +911,18 @@ def register_callbacks(app):
     @app.callback(
         Output("selected-model-store", "data"),
         Output("selected-model-text", "children"),
-        Output("section-loading-training", "children"),
-        Output("section-metrics", "children"),
-        Output("section-graphs", "children"),
         Output("card-loading-training", "style"),
         Output("card-metrics", "style"),
         Output("card-graphs", "style"),
         Output("main-placeholder", "style"),
+        Output("run-token", "data"),   # NEW: trigger downstream callbacks
         Input("btn-select-model", "n_clicks"),
         Input("btn-train-new", "n_clicks"),
         State("settings-store", "data"),
         State("model-dropdown", "value"),
         prevent_initial_call=True,
     )
-    def run_full_pipeline(n_select, n_train, s, dropdown_value):
+    def start_run(n_select, n_train, s, dropdown_value):
         if not s:
             raise PreventUpdate
 
@@ -985,72 +934,100 @@ def register_callbacks(app):
         if trig == "btn-select-model":
             if not dropdown_value:
                 raise PreventUpdate
-
             chosen_name = dropdown_value
             chosen_path = assets_path / chosen_name
-
             if not chosen_path.exists():
-                err = html.Div("Model file not found.", style={"color": "#b00020"})
+                # show cards anyway; downstream sections will show error UI if needed
+                data = {"model_name": None, "source": "none", "match_percent": None}
                 return (
-                    {"model_name": None, "source": "none", "match_percent": None},
+                    data,
                     "None selected",
-                    err,
-                    html.Div("No metrics.", style={"opacity": 0.7}),
-                    html.Div("No graphs.", style={"opacity": 0.7}),
-                    VISIBLE_CARD_STYLE,
-                    VISIBLE_CARD_STYLE,
-                    {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
+                    VISIBLE_CARD_STYLE, VISIBLE_CARD_STYLE, {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
                     {"display": "none"},
+                    str(uuid.uuid4()),
                 )
 
             if chosen_name == desired and desired_path.exists():
                 data = {"model_name": chosen_name, "source": "exact", "match_percent": 100.0}
             else:
                 top3 = top_k_models(s, MODELS_DIR, k=3)
-                mp = None
-                for row in top3:
-                    if row["name"] == chosen_name:
-                        mp = row["score"] * 100
-                        break
+                mp = next((row["score"] * 100 for row in top3 if row["name"] == chosen_name), None)
                 data = {"model_name": chosen_name, "source": "closest", "match_percent": mp}
 
             mp_text = "" if data["match_percent"] is None else f", {data['match_percent']:.1f}%"
             selected_text = f"{chosen_name} ({data['source']}{mp_text})"
 
-            model = load_model(str(chosen_path))  # None
-
-            loading_ui = html.Pre(
-                f"Step 1: SELECT MODEL ✅\n"
-                f"Model file: {chosen_name}\n"
-                f"Path: {chosen_path}\n"
-                f"Source: {data['source']}{mp_text}\n\n"
-                f"Step 2: LOAD MODEL ⏭️ (skipped — loading disabled for demo)\n\n"
-                f"Settings:\n{format_settings_for_display(s)}",
-                style={"whiteSpace": "pre-wrap"},
-            )
-
         elif trig == "btn-train-new":
             train_new_model(s, save_to=str(desired_path))
-
             data = {"model_name": desired, "source": "trained", "match_percent": 100.0}
             selected_text = f"{desired} (trained, 100.0%)"
-
-            model = load_model(str(desired_path))  # None
-
-            loading_ui = html.Pre(
-                f"Step 1: TRAIN NEW MODEL ✅ (placeholder)\n"
-                f"Would save to: {desired_path}\n\n"
-                f"Step 2: LOAD MODEL ⏭️ (skipped — loading disabled for demo)\n\n"
-                f"Settings:\n{format_settings_for_display(s)}",
-                style={"whiteSpace": "pre-wrap"},
-            )
         else:
             raise PreventUpdate
 
-        # Step 3: predictions -> metrics (demo)
+        # Make sections visible immediately; they will show spinners due to dcc.Loading
+        return (
+            data,
+            selected_text,
+            VISIBLE_CARD_STYLE,
+            VISIBLE_CARD_STYLE,
+            {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
+            {"display": "none"},
+            str(uuid.uuid4()),  # new token => triggers section callbacks
+        )
+
+    @app.callback(
+        Output("section-loading-training", "children"),
+        Output("pred-store", "data"),
+        Input("run-token", "data"),
+        State("settings-store", "data"),
+        State("selected-model-store", "data"),
+        prevent_initial_call=True,
+    )
+    def build_overview_and_preds(run_token, s, selected):
+        if not run_token or not s:
+            raise PreventUpdate
+
+        model_name = (selected or {}).get("model_name")
+        source = (selected or {}).get("source")
+        match_percent = (selected or {}).get("match_percent")
+
+        # load model (still None in your demo)
+        model_path = str(Path(MODELS_DIR) / model_name) if model_name else None
+        model = load_model(model_path) if model_path else None
+
+        # heavy step: read csv + create y_true/y_pred
         y_true, y_pred = predict_rul_from_validation_csv(model, VALIDATION_CSV)
 
-        leadtime = float(s["slice_window"])  #
+        mp_text = "" if match_percent is None else f", {match_percent:.1f}%"
+        overview_ui = html.Pre(
+            f"Step 1: SELECT/TRAIN ✅\n"
+            f"Model: {model_name}\n"
+            f"Source: {source}{mp_text}\n\n"
+            f"Step 2: LOAD MODEL ⏭️ (skipped — loading disabled for demo)\n\n"
+            f"Settings:\n{format_settings_for_display(s)}",
+            style={"whiteSpace": "pre-wrap"},
+        )
+
+        pred_store = {
+            "y_true": y_true.tolist(),
+            "y_pred": y_pred.tolist(),
+        }
+        return overview_ui, pred_store
+
+    @app.callback(
+        Output("section-metrics", "children"),
+        Input("pred-store", "data"),
+        State("settings-store", "data"),
+        prevent_initial_call=True,
+    )
+    def compute_metrics_ui(pred_data, s):
+        if not pred_data or not s:
+            raise PreventUpdate
+
+        y_true = np.asarray(pred_data["y_true"], dtype=float)
+        y_pred = np.asarray(pred_data["y_pred"], dtype=float)
+
+        leadtime = float(s["slice_window"])
         cost_fn = make_cost_fn_from_settings(s, leadtime=leadtime)
 
         metrics_dict = compute_all(
@@ -1061,24 +1038,37 @@ def register_callbacks(app):
             critical_true_lt=10.0,
             cost_fn=cost_fn,
         )
-        metrics_ui = render_metrics_section(metrics_dict)
+        return render_metrics_section(metrics_dict)
 
-        # Step 4: graphs
-        graphs_ui = render_graphs_section(
-            y_true,
-            y_pred,
-            s=s,
-            leadtime=leadtime,
-            thresh= 10 * leadtime,  # same as max_err you used in compute_all
-        )
-        return (
-            data,
-            selected_text,
-            loading_ui,
-            metrics_ui,
-            graphs_ui,
-            VISIBLE_CARD_STYLE,
-            VISIBLE_CARD_STYLE,
-            {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
-            {"display": "none"},
-        )
+    @app.callback(
+        Output("section-graphs", "children"),
+        Input("pred-store", "data"),
+        State("settings-store", "data"),
+        prevent_initial_call=True,
+    )
+    def compute_graphs_ui(pred_data, s):
+        if not pred_data or not s:
+            raise PreventUpdate
+
+        try:
+            y_true = np.asarray(pred_data["y_true"], dtype=float).reshape(-1)
+            y_pred = np.asarray(pred_data["y_pred"], dtype=float).reshape(-1)
+
+            if y_true.size == 0 or y_pred.size == 0:
+                return html.Div("No data to plot (empty y_true/y_pred).", style={"opacity": 0.7})
+
+            leadtime = float(s["slice_window"])
+            return render_graphs_section(
+                y_true,
+                y_pred,
+                s=s,
+                leadtime=leadtime,
+                thresh=10 * leadtime,
+            )
+
+        except Exception:
+            return html.Pre(
+                traceback.format_exc(),
+                style={"color": "#b00020", "whiteSpace": "pre-wrap"},
+            )
+
