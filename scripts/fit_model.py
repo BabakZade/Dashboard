@@ -93,8 +93,12 @@ with pm.Model() as model:
     beta_fixed_brake   = pm.Normal("beta_fixed_brake",   mu=0, sigma=1, shape=(n_fixed,))
     beta_dynamic_brake = pm.Normal("beta_dynamic_brake", mu=0, sigma=1, shape=(n_dynamic,))
 
-    alpha_tire  = pm.TruncatedNormal("alpha_tire",  mu=2, sigma=1, lower=0.5)
-    alpha_brake = pm.TruncatedNormal("alpha_brake", mu=2, sigma=1, lower=0.5)
+    # Strong aging prior: lower=2 guarantees accelerating hazard (alpha > 2
+    # means dλ/dt grows faster than linearly with TSLE), mu=4 centres the
+    # posterior well into the rapidly-accelerating regime, sigma=0.3 keeps
+    # the prior tight so the likelihood cannot pull alpha back toward 1.
+    alpha_tire  = pm.TruncatedNormal("alpha_tire",  mu=4, sigma=0.3, lower=2.0)
+    alpha_brake = pm.TruncatedNormal("alpha_brake", mu=4, sigma=0.3, lower=2.0)
 
     beta0_tire  = pm.TruncatedNormal("beta0_tire",  mu=mean_ttf_tire,  sigma=mean_ttf_tire  / 2, lower=1.0)
     beta0_brake = pm.TruncatedNormal("beta0_brake", mu=mean_ttf_brake, sigma=mean_ttf_brake / 2, lower=1.0)
@@ -102,6 +106,9 @@ with pm.Model() as model:
     lp_tire  = pm.math.dot(x_f_tire,  beta_fixed_tire)  + pm.math.dot(x_d_tire,  beta_dynamic_tire)
     lp_brake = pm.math.dot(x_f_brake, beta_fixed_brake) + pm.math.dot(x_d_brake, beta_dynamic_brake)
 
+    # Weibull PH log-likelihood (combined for events and censored in one expression):
+    #   log L_i = event_i * log λ(t_i) + log S(t_i)
+    #           = event_i * [lp_i + log(α/β₀) + (α-1)*log(t_i/β₀)]  -  exp(lp_i) * (t_i/β₀)^α
     t_tire_safe  = pm.math.clip(t_tire,  1e-6, 1e10)
     t_brake_safe = pm.math.clip(t_brake, 1e-6, 1e10)
 

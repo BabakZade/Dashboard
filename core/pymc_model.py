@@ -107,7 +107,11 @@ def _ttf_one_draw(
     partial = np.minimum(rem / h_at, dt[j_step])
     t_pre = np.where(j_s >= 1, ext_time[np.maximum(j_s - 1, 0)], 0.0)
 
-    return np.where(valid, t_pre + partial, horizon).astype(np.float32)
+    # Subtract each start position's own time so the result is TTF (time
+    # remaining from position i), not the absolute crossing time.
+    start_times = ext_time[:n_steps]
+    remaining_horizon = horizon - start_times          # time left to end of segment
+    return np.where(valid, t_pre + partial - start_times, remaining_horizon).astype(np.float32)
 
 
 def _compute_ttf_quantile_from_hazard(
@@ -157,11 +161,49 @@ def compute_ttf_with_reset(
     segment_starts = [0] + [i for i in range(n_steps) if event_indicator[i]]
 
     for seg_start in segment_starts:
-        next_events = [i for i in range(seg_start + 1, n_steps) if event_indicator[i]]
-        seg_end = next_events[0] + 1 if next_events else n_steps
+        seg_end = n_steps
         seg_times = (time_values[seg_start:seg_end] - time_values[seg_start] + 1e-6).astype(np.float32)
         seg_h = hazard_draws[:, seg_start:seg_end]
         ttf_q[seg_start:seg_end] = _compute_ttf_quantile_from_hazard(seg_h, seg_times, quantile)
+
+    return ttf_q
+
+
+def compute_ttf_with_projected_tsle(
+    time_values: np.ndarray,
+    tsle: np.ndarray,
+    lp: np.ndarray,
+    b0: np.ndarray,
+    alp: np.ndarray,
+    fault_indicator: np.ndarray,
+    quantile: float,
+) -> np.ndarray:
+    """TTF quantile using a causal, no-future-reset TSLE projection.
+
+    For each segment starting at `seg_start`, TSLE is projected forward as:
+        tsle_proj[j] = tsle[seg_start] + (time[j] - time[seg_start])
+
+    This eliminates leakage from future failure events baked into the
+    pre-computed hazard array, while preserving the observed TSLE at the
+    start of each segment.
+    """
+    n_steps = len(time_values)
+    ttf_q = np.full(n_steps, np.inf, dtype=np.float32)
+    segment_starts = [0] + [i for i in range(n_steps) if fault_indicator[i]]
+
+    for seg_start in segment_starts:
+        seg_times = time_values[seg_start:]
+        tsle_at_start = float(tsle[seg_start])
+
+        # Project TSLE monotonically forward — no resets after seg_start
+        tsle_proj = (tsle_at_start + (seg_times - seg_times[0])).astype(np.float64)  # (seg_len,)
+
+        # Recompute lam0 with projected TSLE: (draws, seg_len)
+        lam0_proj = (alp / b0) * (tsle_proj[None, :] / b0) ** (alp - 1)
+        lam_proj = (np.exp(lp[:, seg_start:]) * lam0_proj + 1e-9).astype(np.float32)
+
+        seg_times_rel = (seg_times - seg_times[0] + 1e-6).astype(np.float32)
+        ttf_q[seg_start:] = _compute_ttf_quantile_from_hazard(lam_proj, seg_times_rel, quantile)
 
     return ttf_q
 
@@ -224,9 +266,9 @@ def predict_machine(
     prob_lo   = np.percentile(p_draws,  5, axis=0)
     prob_hi   = np.percentile(p_draws, 95, axis=0)
 
-    ttf_05   = compute_ttf_with_reset(lam, time_values, fault_indicator, 0.05)
-    ttf_50   = compute_ttf_with_reset(lam, time_values, fault_indicator, 0.50)
-    ttf_95   = compute_ttf_with_reset(lam, time_values, fault_indicator, 0.95)
+    ttf_05   = compute_ttf_with_projected_tsle(time_values, tsle, lp, b0, alp, fault_indicator, 0.05)
+    ttf_50   = compute_ttf_with_projected_tsle(time_values, tsle, lp, b0, alp, fault_indicator, 0.50)
+    ttf_95   = compute_ttf_with_projected_tsle(time_values, tsle, lp, b0, alp, fault_indicator, 0.95)
     ttf_true = compute_time_to_failure(time_values, fault_indicator.astype(bool))
 
     result = dict(
@@ -240,126 +282,3 @@ def predict_machine(
         _PRED_CACHE[cache_key] = result
 
     return result
-
-
-# Module-level cache --------------------------------------------------------
-_TRACE   = None
-_SCALERS = None
-
-
-# ---------------------------------------------------------------------------
-# I/O helpers
-# ---------------------------------------------------------------------------
-
-def model_is_fitted() -> bool:
-    return os.path.exists(_TRACE_PATH) and os.path.exists(_SCALERS_PATH)
-
-
-def load_artifacts():
-    """Load (and cache) trace + scaler params.  Returns (trace, scalers_dict)."""
-    global _TRACE, _SCALERS
-    if _TRACE is None:
-        _TRACE = az.from_netcdf(_TRACE_PATH)
-    if _SCALERS is None:
-        _SCALERS = dict(np.load(_SCALERS_PATH))
-    return _TRACE, _SCALERS
-
-
-# ---------------------------------------------------------------------------
-# Time-series utilities  (identical logic to create_dset.py)
-# ---------------------------------------------------------------------------
-
-def compute_time_since_last_event(
-    time_values: np.ndarray, event_indicator: np.ndarray
-) -> np.ndarray:
-    tsle = np.empty_like(time_values, dtype=np.float32)
-    last_event_time = time_values[0]
-    for i in range(len(time_values)):
-        if event_indicator[i]:
-            last_event_time = time_values[i]
-        tsle[i] = max(float(time_values[i] - last_event_time), 1e-6)
-    return tsle
-
-
-def compute_time_to_failure(
-    time_values: np.ndarray, failure_indicator: np.ndarray
-) -> np.ndarray:
-    ttf = np.full(len(time_values), np.nan, dtype=np.float32)
-    next_failure_time = np.inf
-    for i in range(len(time_values) - 1, -1, -1):
-        if failure_indicator[i]:
-            next_failure_time = time_values[i]
-            ttf[i] = 0.0
-        elif np.isfinite(next_failure_time):
-            ttf[i] = float(next_failure_time - time_values[i])
-    return ttf
-
-
-def _compute_ttf_quantile_from_hazard(
-    hazard_draws: np.ndarray, time_values: np.ndarray, quantile: float
-) -> np.ndarray:
-    n_steps = len(time_values)
-    if n_steps == 0:
-        return np.array([], dtype=np.float32)
-    if n_steps == 1:
-        return np.full(1, np.inf, dtype=np.float32)
-
-    dt = np.diff(time_values.astype(np.float32))
-    pos = dt[dt > 0]
-    last_dt = float(np.median(pos)) if pos.size > 0 else 1.0
-    dt = np.append(dt, last_dt).astype(np.float32)
-
-    threshold = -np.log(np.clip(1.0 - quantile, 1e-9, 1.0))
-    ttf_q = np.full(n_steps, np.inf, dtype=np.float32)
-
-    for start_idx in range(n_steps):
-        local_h  = hazard_draws[:, start_idx:]
-        local_dt = dt[start_idx:]
-        cum_h = np.cumsum(local_h * local_dt[None, :], axis=1)
-        reached = cum_h >= threshold
-        has_cross = reached.any(axis=1)
-        horizon = float(local_dt.sum())
-
-        if not has_cross.any():
-            ttf_q[start_idx] = horizon
-            continue
-
-        first_cross = np.argmax(reached, axis=1)
-        cum_time = np.cumsum(local_dt)
-        crossing = np.full(local_h.shape[0], np.inf, dtype=np.float32)
-
-        for row in np.where(has_cross)[0]:
-            cc = first_cross[row]
-            h_level = max(float(local_h[row, cc]), 1e-9)
-            h_before = float(cum_h[row, cc - 1]) if cc > 0 else 0.0
-            rem = max(threshold - h_before, 0.0)
-            partial = min(rem / h_level, float(local_dt[cc]))
-            t_before = float(cum_time[cc - 1]) if cc > 0 else 0.0
-            crossing[row] = t_before + partial
-
-        finite = crossing[np.isfinite(crossing)]
-        ttf_q[start_idx] = float(np.percentile(finite, quantile * 100.0)) if finite.size > 0 else horizon
-
-    return ttf_q
-
-
-def compute_ttf_with_reset(
-    hazard_draws: np.ndarray,
-    time_values: np.ndarray,
-    event_indicator: np.ndarray,
-    quantile: float,
-) -> np.ndarray:
-    n_steps = len(time_values)
-    ttf_q = np.full(n_steps, np.inf, dtype=np.float32)
-    segment_starts = [0] + [i for i in range(n_steps) if event_indicator[i]]
-
-    for seg_start in segment_starts:
-        next_events = [i for i in range(seg_start + 1, n_steps) if event_indicator[i]]
-        seg_end = next_events[0] + 1 if next_events else n_steps
-        seg_times = (time_values[seg_start:seg_end] - time_values[seg_start] + 1e-6).astype(np.float32)
-        seg_h = hazard_draws[:, seg_start:seg_end]
-        ttf_q[seg_start:seg_end] = _compute_ttf_quantile_from_hazard(seg_h, seg_times, quantile)
-
-    return ttf_q
-
-
