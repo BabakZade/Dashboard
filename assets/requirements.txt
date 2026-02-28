@@ -1,0 +1,9 @@
+dash
+dash-bootstrap-components
+plotly
+numpy
+pandas
+joblib
+gunicorn
+arviz
+pymc

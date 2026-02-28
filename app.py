@@ -3,34 +3,6 @@ import subprocess
 import sys
 
 
-REQUIRED = {
-    "dash": "dash",
-    "plotly": "plotly",
-    "numpy": "numpy",
-    "dash_bootstrap_components": "dash-bootstrap-components",
-    "arviz" : "arviz"
-}
-
-missing = [mod for mod in REQUIRED if importlib.util.find_spec(mod) is None]
-
-if missing:
-    pkgs = [REQUIRED[m] for m in missing]
-    print("❌ Missing required packages:", ", ".join(pkgs))
-    print("Installing...")
-
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", *pkgs])
-        print("✅ Installed:", ", ".join(pkgs))
-    except Exception as e:
-        print("❌ Install failed:", e)
-        raise SystemExit(1)
-
-    # re-check after install
-    still_missing = [mod for mod in REQUIRED if importlib.util.find_spec(mod) is None]
-    if still_missing:
-        print("❌ Still missing after install:", ", ".join(still_missing))
-        raise SystemExit(1)
-
 from dash import Dash, dcc, html, Input, Output, State
 
 from pages import home, cost_function, data_simulator, rul_distribution, cost_sensitive_model, benchmark
@@ -53,6 +25,10 @@ app = Dash(
     external_stylesheets=external_stylesheets,
     assets_folder="assets"
 )
+
+server = app.server
+
+
 app.title = "Cost-sensitive predictive maintenance"
 
 # Routes and icons for the sidebar menu
@@ -259,7 +235,7 @@ app.validation_layout = html.Div(
     ]
 )
 
-# Start the Dash app
 if __name__ == "__main__":
-    print("Starting Dash on http://127.0.0.1:8051/")
-    app.run(debug=True, host="127.0.0.1", port=8051)
+    import os
+    port = int(os.environ.get("PORT", 8050))
+    app.run_server(debug=False, host="0.0.0.0", port=port)
