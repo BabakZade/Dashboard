@@ -1,11 +1,17 @@
-arviz
 dash
-jax
-jaxlib
-matplotlib
-nutpie
-pandas
+dash-bootstrap-components
 plotly
-pyarrow
+numpy
+pandas
+joblib
+gunicorn
+
+# ML / modeling (only if your pages/core truly use them)
+arviz
 pymc
 scikit-learn
+matplotlib
+pyarrow
+jax
+jaxlib
+nutpie
