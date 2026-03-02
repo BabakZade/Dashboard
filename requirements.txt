@@ -15,3 +15,10 @@ pyarrow
 jax
 jaxlib
 nutpie
+
+#extras
+pyomo
+highspy
+
+full_calendar_component
+holidays

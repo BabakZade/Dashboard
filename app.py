@@ -1,34 +1,38 @@
+# app.py
 import importlib.util
 import subprocess
 import sys
 
-
 from dash import Dash, dcc, html, Input, Output, State
-
-from pages import home, cost_function, data_simulator, rul_distribution, cost_sensitive_model, benchmark
 import dash_bootstrap_components as dbc
 
-from pages.benchmark import DATA_ROWS, OUT_ROWS
+from pages import (
+    home,
+    cost_function,
+    data_simulator,
+    rul_distribution,
+    cost_sensitive_model,
+    benchmark,
+    maintenance_planning,   # ✅ NEW
+)
 
+from pages.benchmark import DATA_ROWS, OUT_ROWS
 
 # External stylesheets (including Font Awesome CDN)
 external_stylesheets = [
     dbc.themes.BOOTSTRAP,
-    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"  # Font Awesome 6 CDN
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css",
 ]
-
 
 # Initialize the Dash app
 app = Dash(
     __name__,
     suppress_callback_exceptions=True,
     external_stylesheets=external_stylesheets,
-    assets_folder="assets"
+    assets_folder="assets",
 )
 
 server = app.server
-
-
 app.title = "Cost-sensitive predictive maintenance"
 
 # Routes and icons for the sidebar menu
@@ -38,16 +42,18 @@ ROUTES = {
     "/data-simulator": ("Page 2 — Data Simulator", data_simulator.layout),
     "/rul-distribution": ("Page 3 — RUL distribution", rul_distribution.layout),
     "/cost-sensitive-model": ("Page 4 — Cost sensitive model", cost_sensitive_model.layout),
-    "/benchmark": ("Page 5 — Benchmark", benchmark.layout),
+    "/maintenance-planning": ("Page 5 — Maintenance planning", maintenance_planning.layout),  # ✅ NEW
+    "/benchmark": ("Page 6 — Benchmark", benchmark.layout),  # shifted index label only
 }
 
 ICONS = {
-    "/": "fa-solid fa-house-laptop",  # Home 
-    "/cost-function": "fa-solid fa-file-contract", 
-    "/data-simulator": "fa-solid fa-database",  # Flask
-    "/rul-distribution": "fa-solid fa-chart-area",  # Line chart (alternative to fa-area-chart)
-    "/cost-sensitive-model": "fa-solid fa-filter-circle-dollar",  # Gear icon (fa-gear can sometimes have issues)
-    "/benchmark": "fa-solid fa-chart-pie",  # Pie chart
+    "/": "fa-solid fa-house-laptop",
+    "/cost-function": "fa-solid fa-file-contract",
+    "/data-simulator": "fa-solid fa-database",
+    "/rul-distribution": "fa-solid fa-chart-area",
+    "/cost-sensitive-model": "fa-solid fa-filter-circle-dollar",
+    "/maintenance-planning": "fa-solid fa-screwdriver-wrench",  # ✅ NEW icon
+    "/benchmark": "fa-solid fa-chart-pie",
 }
 
 DATA_ROWS = benchmark.DATA_ROWS
@@ -58,7 +64,7 @@ def nav_link(label, href, icon_class):
     return dcc.Link(
         html.Div(
             [
-                html.I(className=icon_class, style={"marginRight": "10px"}),  # Icon class applied
+                html.I(className=icon_class, style={"marginRight": "10px"}),
                 label,
             ],
             style={"display": "flex", "alignItems": "center"},
@@ -83,7 +89,7 @@ def sidebar_style(is_open: bool):
         "backgroundColor": "white",
         "flexShrink": 0,
         "position": "sticky",
-        "top": "54px",  # Must match topbar height
+        "top": "54px",
         "height": "calc(100vh - 54px)",
         "overflowY": "auto",
     }
@@ -93,8 +99,13 @@ app.layout = html.Div(
     children=[
         dcc.Location(id="url", refresh=False),
         dcc.Store(id="menu_open", data=False),
+
+        # existing stores
         dcc.Store(id="bench_data_store", data=DATA_ROWS),
         dcc.Store(id="bench_out_store", data=OUT_ROWS),
+
+        # ✅ GLOBAL STORE for cross-page inputs
+        dcc.Store(id="shared-inputs", storage_type="session"),
 
         html.Div(
             id="topbar",
@@ -144,6 +155,7 @@ app.layout = html.Div(
                         nav_link("Data Simulator", "/data-simulator", ICONS["/data-simulator"]),
                         nav_link("RUL distribution", "/rul-distribution", ICONS["/rul-distribution"]),
                         nav_link("Cost sensitive model", "/cost-sensitive-model", ICONS["/cost-sensitive-model"]),
+                        nav_link("Maintenance planning", "/maintenance-planning", ICONS["/maintenance-planning"]),  # ✅ NEW
                         nav_link("Benchmark", "/benchmark", ICONS["/benchmark"]),
                     ],
                 ),
@@ -220,6 +232,7 @@ cost_function.register_callbacks(app)
 data_simulator.register_callbacks(app)
 rul_distribution.register_callbacks(app)
 cost_sensitive_model.register_callbacks(app)
+maintenance_planning.register_callbacks(app)  # ✅ NEW
 benchmark.register_callbacks(app)
 
 # Set validation layout for Dash
@@ -231,6 +244,7 @@ app.validation_layout = html.Div(
         data_simulator.layout(),
         rul_distribution.layout(),
         cost_sensitive_model.layout(),
+        maintenance_planning.layout(),  # ✅ NEW
         benchmark.layout(),
     ]
 )
@@ -238,4 +252,5 @@ app.validation_layout = html.Div(
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8050))
+    #app.run(debug=False, host="0.0.0.0", port=port)
     app.run_server(debug=False, host="0.0.0.0", port=port)
