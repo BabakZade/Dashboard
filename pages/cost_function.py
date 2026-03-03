@@ -206,15 +206,20 @@ def part2_both_costs_fig(rul_pred: float, rul_true: float, leadtime: float, C_PR
     )
     return fig
 
-
 def slider_block_inline():
     return html.Div(
         style={
+            # your existing styles
             "border": "1px solid #ddd",
             "borderRadius": "14px",
             "padding": "12px",
             "background": "white",
             "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
+
+            # NEW: make it stick while scrolling
+            "position": "sticky",
+            "top": "70px",   # <-- set this to your header height (+ a little gap)
+            "zIndex": 2000,
         },
         children=[
             html.Div("Maintenance time", style={"fontWeight": 900, "marginBottom": "6px"}),
