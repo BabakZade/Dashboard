@@ -9,6 +9,7 @@ import pyomo.environ as pyo
 
 from datetime import date, timedelta
 import full_calendar_component as fcc
+from pathlib import Path
 
 
 from dash.exceptions import PreventUpdate
@@ -16,6 +17,10 @@ from dash.exceptions import PreventUpdate
 
 import traceback
 import plotly.graph_objects as go
+
+ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"  # pages/.. -> project root
+    
+ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------
@@ -213,7 +218,15 @@ def solve_instance(data: dict, solver_name: str) -> tuple[float, pd.DataFrame, p
     model = build_model(data)
 
     # Optional: export model for debugging
-    model.write("maintenance_model.lp", io_options={"symbolic_solver_labels": True})
+    
+
+    # Write .lp
+    lp_path = ASSETS_DIR / "maintenance_model.lp"
+    model.write(str(lp_path), io_options={"symbolic_solver_labels": True})
+
+    # Write a .txt copy so browsers reliably show it as text
+    txt_path = ASSETS_DIR / "maintenance_model.txt"
+    txt_path.write_text(lp_path.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
 
     solver = pyo.SolverFactory(solver_name)
     if (solver is None) or (not solver.available(False)):
@@ -469,6 +482,7 @@ def layout():
             dcc.Store(id="mp-cost-modal-open", data=False),
             dcc.Store(id="mp-last-summary", data=None),
             dcc.Store(id="mp-planner-controls", data={"R_override": None, "work_all_days": False}),
+            
 
             # --- Costs modal (hidden by default) ---
             html.Div(
@@ -625,12 +639,12 @@ def layout():
                             dcc.Dropdown(
                                 id="mp-solver",
                                 options=[
-                                    {"label": "GLPK (glpk)", "value": "glpk"},
-                                    {"label": "CBC (cbc)", "value": "cbc"},
                                     {"label": "HiGHS (highs)", "value": "highs"},
+                                    {"label": "GLPK (glpk)", "value": "glpk"},
+                                    {"label": "CBC (cbc)", "value": "cbc"},                                    
                                     {"label": "Gurobi (gurobi)", "value": "gurobi"},
                                 ],
-                                value="glpk",
+                                value="highs",
                                 clearable=False,
                             ),
                         ],
@@ -648,8 +662,14 @@ def layout():
                             "height": "40px",
                         },
                     ),
-                    dcc.Link("Go to Inputs page", href="/inputs", style={"marginLeft": "8px"}),
-                ],
+                    html.A(
+                        "Open MIP (PDF)",
+                        href="/assets/MIP.pdf",
+                        target="_blank",  # opens in a new tab
+                        style={"marginLeft": "8px"},
+                    ),
+                    html.Div(id="mp-after-run-links", style={"marginTop": "10px"}),
+                                    ],
             ),
 
             html.Hr(style={"margin": "16px 0"}),
@@ -1029,6 +1049,7 @@ def register_callbacks(app):
         Output("mp-kpi-total", "children"),
         Output("mp-kpi-status", "children"),
         Output("mp-last-summary", "data"),
+        Output("mp-after-run-links", "children"),
         Input("mp-run", "n_clicks"),
         Input("shared-inputs", "data"),
         Input("mp-planner-controls", "data"),   # <-- ADD THIS
@@ -1146,6 +1167,7 @@ def register_callbacks(app):
                     kpi_total,
                     kpi_status, 
                     baseline_summary,
+                    "",#  no links until optimization
                 )
 
             # --- If triggered by Run button: solve optimizer and overlay results ---
@@ -1181,6 +1203,17 @@ def register_callbacks(app):
                 html.Span("Termination: optimal/feasible."),
             ])
 
+            links = html.Div(
+                style={"display": "flex", "gap": "10px", "alignItems": "center", "flexWrap": "wrap"},
+                children=[
+                    html.A(
+                        "Open model",
+                        href=f"/assets/maintenance_model.txt?v={n_clicks}",  # cache buster
+                        target="_blank",
+                    ),
+                ],
+            )
+
             return (
                 status,
                 f"Objective value: {float(obj):,.4f}",
@@ -1196,6 +1229,7 @@ def register_callbacks(app):
                 kpi_total,
                 html.Span("Feasible", style={"color": "#1bb31b", "fontWeight": 700}),
                 summary,
+                links,
             )
 
         except Exception as e:
@@ -1224,6 +1258,7 @@ def register_callbacks(app):
                 "-",
                 "-",
                 None,
+                "",
             )
 
     # ----------------------------------------
