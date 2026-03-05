@@ -35,6 +35,14 @@ except Exception:
 # ---------------------------
 # Pyomo model
 # ---------------------------
+
+import pyomo.environ as pyo
+
+
+
+# ---------------------------
+# Pyomo model (WORKDAY-BASED DURATIONS)
+# ---------------------------
 def build_model(data: dict) -> pyo.ConcreteModel:
     m = pyo.ConcreteModel("FleetMaintenancePlanning")
 
@@ -44,8 +52,14 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     m.I = pyo.Set(initialize=data["I"])
     m.F = pyo.Set(initialize=data["F"])
     m.D = pyo.Set(initialize=data["D"], ordered=True)
+
     m.IF = pyo.Set(initialize=[(i, f) for i in data["I"] for f in data["F"]])
     m.IFD = pyo.Set(initialize=[(i, f, d) for i in data["I"] for f in data["F"] for d in data["D"]])
+
+    D_list = list(data["D"])
+    D_set = set(D_list)
+    D_min = min(D_list)
+    D_max = max(D_list)
 
     # -----------------------
     # Parameters
@@ -56,7 +70,7 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     m.alpha = pyo.Param(m.IF, initialize=data["alpha"], within=pyo.NonNegativeReals)
     m.beta = pyo.Param(m.IF, initialize=data["beta"], within=pyo.NonNegativeReals)
 
-    # mode costs (NEW)
+    # mode costs
     m.c_pr = pyo.Param(m.IF, initialize=data["c_pr"], within=pyo.NonNegativeReals)
     m.c_u_pr = pyo.Param(m.IF, initialize=data["c_u_pr"], within=pyo.NonNegativeReals)
     m.c_re = pyo.Param(m.IF, initialize=data["c_re"], within=pyo.NonNegativeReals)
@@ -65,7 +79,11 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     m.F_if = pyo.Param(m.IF, initialize=data["F_if"], within=pyo.Binary)
     m.LT = pyo.Param(m.I, initialize=data["LT"], within=pyo.NonNegativeReals)
 
-    # daily capacity (NEW)
+    # durations (interpreted as WORKDAYS)
+    m.tau_s = pyo.Param(m.I, initialize=data["tau_s"], within=pyo.PositiveIntegers)          # tau_i^s (workdays)
+    m.tau_exec = pyo.Param(m.IF, initialize=data["tau_exec"], within=pyo.PositiveIntegers)  # tau_if  (workdays)
+
+    # fleet daily capacity: max number of ONGOING EXECUTIONS per calendar day (counted in workday-time)
     m.R = pyo.Param(initialize=float(data["R"]), within=pyo.PositiveReals)
 
     # Big-M
@@ -77,22 +95,55 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     # -----------------------
     # Decision variables
     # -----------------------
-    m.x = pyo.Var(m.IFD, within=pyo.Binary)             # schedule decision
-    m.y = pyo.Var(m.I, m.D, within=pyo.Binary)          # setup day
+    m.x = pyo.Var(m.IFD, within=pyo.Binary)  # x_ifd: execution starts on day d
+    m.y = pyo.Var(m.IFD, within=pyo.Binary)  # y_ifd: setup starts on day d (associated to f)
 
-    m.e = pyo.Var(m.IF, within=pyo.Binary)              # regular predictive
-    m.l = pyo.Var(m.IF, within=pyo.Binary)              # reactive
-    m.u = pyo.Var(m.IF, within=pyo.Binary)              # emergency predictive
+    m.e = pyo.Var(m.IF, within=pyo.Binary)   # e_if: regular predictive
+    m.l = pyo.Var(m.IF, within=pyo.Binary)   # l_if: reactive
+    m.u = pyo.Var(m.IF, within=pyo.Binary)   # u_if: urgent predictive
 
-    # penalty variables (NEW)
-    m.phi = pyo.Var(m.IF, within=pyo.NonNegativeReals)  # varphi
-    m.psi = pyo.Var(m.IF, within=pyo.NonNegativeReals)  # psi
+    m.phi = pyo.Var(m.IF, within=pyo.NonNegativeReals)  # varphi_if
+    m.psi = pyo.Var(m.IF, within=pyo.NonNegativeReals)  # psi_if
+
+    # -----------------------
+    # Precompute previous workday lookup
+    # prev_wd[(d,k)] = k-th previous WORKDAY strictly before d, else None
+    # Example: if 8,9 are weekend and d=10 then prev_wd[(10,2)] = 6
+    # -----------------------
+    workday_dict = data["workday"]  # raw dict day->0/1 for faster python checks
+
+    prev_wd: dict[tuple[int, int], int | None] = {}
+
+    def t1_working_days_before(the_day: int, t1: int, workday_dict: dict[int, int]) -> int | None:
+        """
+        Return the calendar day that is t1 WORKDAYS strictly before 'the_day'.
+        Days are assumed to be 1..horizon.
+        If not enough previous workdays exist, return None.
+        """
+        if t1 <= 0:
+            return int(the_day)
+
+        day = int(the_day)
+        remaining = int(t1)
+
+        while remaining > 0:
+            day -= 1
+            if day < 1:
+                return None
+            if int(workday_dict.get(day, 0)) == 1:
+                remaining -= 1
+
+        return day
+
+   
 
     # -----------------------
     # Objective
     # -----------------------
     def obj_rule(m):
-        setup_cost = sum(m.c_setup[i] * m.y[i, d] for i in m.I for d in m.D)
+        # Minimize: setup + penalties + mode costs
+        # setup_cost = sum_{i,f,d} c_setup[i] * y_ifd
+        setup_cost = sum(m.c_setup[i] * m.y[i, f, d] for i in m.I for f in m.F for d in m.D)
 
         penalty_cost = sum(
             m.alpha[i, f] * m.phi[i, f] + m.beta[i, f] * m.psi[i, f]
@@ -108,112 +159,194 @@ def build_model(data: dict) -> pyo.ConcreteModel:
 
         return setup_cost + penalty_cost + mode_cost
 
-    m.OBJ = pyo.Objective(
-        rule=obj_rule,
-        sense=pyo.minimize,
-        doc=(
-            "Minimize total maintenance planning cost = setup costs (sum c_setup*y) "
-            "+ timing penalties (sum alpha*phi + beta*psi) "
-            "+ mode costs (sum c_pr*e + c_u_pr*u + c_re*l)."
-        ),
-    )
+    m.OBJ = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
     # -----------------------
     # Constraints
     # -----------------------
 
-    # (1) Schedule: exactly one day if failure within horizon
+    # (C1) Scheduling within horizon:
+    #   sum_{d in D} x_{i,f,d} = F_if(i,f)   for all (i,f)
     def schedule_rule(m, i, f):
         return sum(m.x[i, f, d] for d in m.D) == m.F_if[i, f]
 
-    m.Schedule = pyo.Constraint(
-        m.IF, rule=schedule_rule,
-        doc="Scheduling within horizon: choose exactly one maintenance day for (i,f) if F_if=1, else choose none."
-    )
+    m.Schedule = pyo.Constraint(m.IF, rule=schedule_rule)
 
-    # (2) Link setup y to scheduling x  (sum_f x_ifd <= M * y_id)
-    def y_link_rule(m, i, d):
-        return sum(m.x[i, f, d] for f in m.F) <= m.M * m.y[i, d]
-
-    m.YLink = pyo.Constraint(
-        m.I, m.D, rule=y_link_rule,
-        doc="Link setup to scheduled jobs: if any failure-type is scheduled on day d for asset i, then y_id must be 1."
-    )
-
-    # (3) Daily capacity: sum_i y_id <= R
-    def cap_rule(m, d):
-        return sum(m.y[i, d] for i in m.I) <= m.R
-
-    m.Capacity = pyo.Constraint(
-        m.D, rule=cap_rule,
-        doc="Daily capacity: at most R assets can be initiated (y=1) on each day d."
-    )
-
-    # (4) Define penalty variable phi (tardiness/downtime)
-    def phi_def_rule(m, i, f):
-        if pyo.value(m.F_if[i, f]) < 0.5:
-            return pyo.Constraint.Skip
-        return sum(d * m.x[i, f, d] for d in m.D) - m.RUL[i, f] <= m.phi[i, f]
-
-    m.PhiDef = pyo.Constraint(
-        m.IF, rule=phi_def_rule,
-        doc="Define phi (tardiness): phi_if upper-bounds (scheduled_day - RUL_if) for pairs with F_if=1."
-    )
-
-    # (5) Define penalty variable psi (earliness/unused RUL)
-    def psi_def_rule(m, i, f):
-        if pyo.value(m.F_if[i, f]) < 0.5:
-            return pyo.Constraint.Skip
-        return (m.RUL[i, f] - m.LT[i]) - sum(d * m.x[i, f, d] for d in m.D) <= m.psi[i, f]
-
-    m.PsiDef = pyo.Constraint(
-        m.IF, rule=psi_def_rule,
-        doc="Define psi (earliness): psi_if upper-bounds ((RUL_if - LT_i) - scheduled_day) for pairs with F_if=1."
-    )
-
-    # (6) Big-M activation for reactive mode: phi_if <= M * l_if
-    def reactive_activation_rule(m, i, f):
-        if pyo.value(m.F_if[i, f]) < 0.5:
-            return pyo.Constraint.Skip
-        return m.phi[i, f] <= m.M * m.l[i, f]
-
-    m.ReactiveActivation = pyo.Constraint(
-        m.IF, rule=reactive_activation_rule,
-        doc="Reactive activation: positive tardiness (phi) is allowed only if reactive mode l_if=1 (via big-M)."
-    )
-
-    # (7) Big-M activation for regular predictive mode: psi_if <= M * e_if
-    def regular_activation_rule(m, i, f):
-        if pyo.value(m.F_if[i, f]) < 0.5:
-            return pyo.Constraint.Skip
-        return m.psi[i, f] <= m.M * m.e[i, f]
-
-    m.RegularActivation = pyo.Constraint(
-        m.IF, rule=regular_activation_rule,
-        doc="Regular predictive activation: positive earliness (psi) is allowed only if regular mode e_if=1 (via big-M)."
-    )
-
-    # (8) Exactly one mode: l + e + u = F_if
-    def mode_rule(m, i, f):
-        if pyo.value(m.F_if[i, f]) < 0.5:
-            return pyo.Constraint.Skip
-        return m.l[i, f] + m.e[i, f] + m.u[i, f] == m.F_if[i, f]
-
-    m.ModeSelect = pyo.Constraint(
-        m.IF, rule=mode_rule,
-        doc="Mode selection: for each (i,f) with F_if=1, choose exactly one of {reactive, regular predictive, emergency predictive}."
-    )
-
-    # (9) Workday restriction: prevent scheduling on non-workdays
+    # (C10) Workday restriction for execution starts:
+    #   x_{i,f,d} <= workday_d   for all (i,f,d)
     def workday_rule(m, i, f, d):
         return m.x[i, f, d] <= m.workday[d]
 
-    m.Workday = pyo.Constraint(
-        m.IFD, rule=workday_rule,
-        doc="Calendar feasibility: maintenance can only be scheduled on workdays (x_ifd <= workday_d)."
+    m.Workday = pyo.Constraint(m.IFD, rule=workday_rule)
+
+    # (C11) Workday restriction for setup starts:
+    #   y_{i,f,d} <= workday_d   for all (i,f,d)
+    def setup_workday_rule(m, i, f, d):
+        return m.y[i, f, d] <= m.workday[d]
+
+    m.SetupWorkday = pyo.Constraint(m.IFD, rule=setup_workday_rule)
+
+    # (C2) Link (setup-before OR continuation on previous WORKDAY):
+    #   x_{i,f,d} <= y_{i,f, prev_wd(d, tau_s(i)) } + 1{asset i executing at prev_wd(d,1) via some f2 != f}
+    #
+    # Interpretation:
+    # - setup must start tau_s(i) WORKDAYS before day d, OR
+    # - asset was already executing another fault on the previous WORKDAY (continuation of visit).
+    def link_rule(m, i, f, d):
+        # Skip non-workdays (x is already forced to 0 by Workday constraint)
+        if int(pyo.value(m.workday[d])) == 0:
+            return pyo.Constraint.Skip
+
+        # ---- setup term: y_{if, d - tau_s(i)} in WORKDAYS
+        tau_s = int(pyo.value(m.tau_s[i]))
+        setup_day = t1_working_days_before(d, tau_s, workday_dict)
+
+        setup_ok = 0
+        if setup_day is not None and setup_day in D_set:
+            setup_ok = m.y[i, f, setup_day]
+
+        # ---- continuation term: sum_{f2 != f} x_{i f2, d - tau_exec(i,f2)} in WORKDAYS
+        cont_ok = 0
+        for f2 in m.F:
+            if f2 == f:
+                continue
+
+            tau2 = int(pyo.value(m.tau_exec[i, f2]))
+            maint_day = t1_working_days_before(d, tau2, workday_dict)
+
+            if maint_day is not None and maint_day in D_set:
+                cont_ok += m.x[i, f2, maint_day]
+
+        return m.x[i, f, d] <= setup_ok + cont_ok
+
+    m.Link = pyo.Constraint(m.IFD, rule=link_rule)
+
+    # (C3) Continuity (no overlap per asset-day; WORKDAY durations):
+    #   ongoing_exec(i,d) + ongoing_setup(i,d) <= 1   for all i,d
+    #
+    # ongoing_exec(i,d) = sum_{f} sum_{d0} x_{i,f,d0} * 1{d is within first tau_exec(i,f) WORKDAYS after d0}
+    # ongoing_setup(i,d) = sum_{f} sum_{d0} y_{i,f,d0} * 1{d is within first tau_s(i) WORKDAYS after d0}
+    def continuity_rule(m, i, d):
+        ongoing_exec = 0
+        for f in m.F:
+            tau = int(pyo.value(m.tau_exec[i, f]))  # workdays
+            for d0 in m.D:
+                if d0 > d:
+                    continue
+
+                wd_count = 0
+                t = d0
+                while t <= d:
+                    if int(pyo.value(m.workday[t])) == 1:
+                        wd_count += 1
+                    t += 1
+
+                if 1 <= wd_count <= tau:
+                    ongoing_exec += m.x[i, f, d0]
+
+        ongoing_setup = 0
+        tau_s = int(pyo.value(m.tau_s[i]))  # workdays
+        for f in m.F:
+            for d0 in m.D:
+                if d0 > d:
+                    continue
+
+                wd_count = 0
+                t = d0
+                while t <= d:
+                    if int(pyo.value(m.workday[t])) == 1:
+                        wd_count += 1
+                    t += 1
+
+                if 1 <= wd_count <= tau_s:
+                    ongoing_setup += m.y[i, f, d0]
+
+        return ongoing_exec + ongoing_setup <= 1
+
+    m.Continuity = pyo.Constraint(
+        m.I, m.D, rule=continuity_rule,
+        doc="Continuity (workday-based): at most one ongoing activity per asset-day; durations counted in workdays."
     )
 
+    # (C4) Fleet capacity (ongoing executions across all assets; WORKDAY durations):
+    #   sum_{i,f} sum_{d0} x_{i,f,d0} * 1{d is within first tau_exec(i,f) WORKDAYS after d0} <= R   for all d
+    def fleet_capacity_rule(m, d):
+        expr = 0
+        for i in m.I:
+            for f in m.F:
+                tau = int(pyo.value(m.tau_exec[i, f]))  # workdays
+                for d0 in m.D:
+                    if d0 > d:
+                        continue
+
+                    wd_count = 0
+                    t = d0
+                    while t <= d:
+                        if int(pyo.value(m.workday[t])) == 1:
+                            wd_count += 1
+                        t += 1
+
+                    if 1 <= wd_count <= tau:
+                        expr += m.x[i, f, d0]
+        for i in m.I:
+            for f in m.F:
+                tau_s = int(pyo.value(m.tau_s[i]))  # workdays
+                for d0 in m.D:
+                    if d0 > d:
+                        continue
+
+                    wd_count = 0
+                    t = d0
+                    while t <= d:
+                        if int(pyo.value(m.workday[t])) == 1:
+                            wd_count += 1
+                        t += 1
+
+                    if 1 <= wd_count <= tau_s:
+                        expr += m.y[i, f, d0]
+
+        return expr <= m.R
+
+    m.FleetCapacity = pyo.Constraint(m.D, rule=fleet_capacity_rule)
+
+    # (C5) Define phi (lateness / downtime):
+    #   sum_{d in D} d*x_{i,f,d} - RUL_{i,f} <= phi_{i,f}
+    def phi_def_rule(m, i, f):
+        return sum(d * m.x[i, f, d] for d in m.D) - m.RUL[i, f] <= m.phi[i, f]
+
+    m.PhiDef = pyo.Constraint(m.IF, rule=phi_def_rule)
+
+    # (C6) Define psi (earliness / unused RUL):
+    #   (RUL_{i,f} - LT_i) - sum_{d in D} d*x_{i,f,d} <= psi_{i,f}
+    def psi_def_rule(m, i, f):
+        return (m.RUL[i, f] - m.LT[i]) - sum(d * m.x[i, f, d] for d in m.D) <= m.psi[i, f]
+
+    m.PsiDef = pyo.Constraint(m.IF, rule=psi_def_rule)
+
+    # (C7) Big-M activation for reactive mode:
+    #   phi_{i,f} <= M * l_{i,f}
+    def reactive_activation_rule(m, i, f):
+        return m.phi[i, f] <= m.M * m.l[i, f]
+
+    m.ReactiveActivation = pyo.Constraint(m.IF, rule=reactive_activation_rule)
+
+    # (C8) Big-M activation for regular predictive mode:
+    #   psi_{i,f} <= M * e_{i,f}
+    def regular_activation_rule(m, i, f):
+        return m.psi[i, f] <= m.M * m.e[i, f]
+
+    m.RegularActivation = pyo.Constraint(m.IF, rule=regular_activation_rule)
+
+    # (C9) Mode selection:
+    #   l_{i,f} + e_{i,f} + u_{i,f} = F_if(i,f)
+    def mode_rule(m, i, f):
+        return m.l[i, f] + m.e[i, f] + m.u[i, f] == m.F_if[i, f]
+
+    m.ModeSelect = pyo.Constraint(m.IF, rule=mode_rule)
+
     return m
+
+
 def solve_instance(data: dict, solver_name: str) -> tuple[float, pd.DataFrame, pd.DataFrame, dict]:
     model = build_model(data)
 
@@ -273,18 +406,27 @@ def solve_instance(data: dict, solver_name: str) -> tuple[float, pd.DataFrame, p
 
     setup_rows = []
     for i in model.I:
-        for d in model.D:
-            if pyo.value(model.y[i, d]) > 0.5:
-                setup_rows.append(
-                    {"asset_i": i, "setup_day_d": int(d), "setup_cost": float(pyo.value(model.c_setup[i]))}
-                )
-    df_setup = pd.DataFrame(setup_rows).sort_values(["asset_i", "setup_day_d"], ignore_index=True)
+        for f in model.F:
+            for d in model.D:
+                if pyo.value(model.y[i, f, d]) > 0.5:
+                    setup_rows.append({
+                        "asset_i": i,
+                        "failure_f": f,
+                        "setup_day_d": int(d),
+                        "setup_cost": float(pyo.value(model.c_setup[i])),
+                    })
+
+    df_setup = pd.DataFrame(setup_rows).sort_values(["asset_i", "setup_day_d", "failure_f"], ignore_index=True)
 
     # --- cost components (UPDATED) ---
     setup_cost_val = float(
-        sum(pyo.value(model.c_setup[i]) * pyo.value(model.y[i, d]) for i in model.I for d in model.D)
+        sum(
+            pyo.value(model.c_setup[i]) * pyo.value(model.y[i, f, d])
+            for i in model.I
+            for f in model.F
+            for d in model.D
+        )
     )
-
     # penalties
     phi_cost_val = float(
         sum(pyo.value(model.alpha[i, f]) * pyo.value(model.phi[i, f]) for (i, f) in model.IF)
@@ -332,6 +474,9 @@ def solve_instance(data: dict, solver_name: str) -> tuple[float, pd.DataFrame, p
 # ---------------------------
 # Data generator
 # ---------------------------
+
+
+
 def _base_data(
     n_assets: int = 100,
     horizon: int = 31,
@@ -340,44 +485,68 @@ def _base_data(
     seed: int | None = 42,
     start_date: date | None = None,
     holiday_country: str = "BE",
-    R: int = 10,  # NEW: daily capacity (max assets initiated per day)
+    R: int = 10,  # daily capacity
+    # Durations (days)
+    tau_s_range: tuple[int, int] = (1, 3),      # tau_i^s
+    tau_exec_range: tuple[int, int] = (1, 5),   # tau_if
 ) -> dict:
     rng = np.random.default_rng(seed)
 
+    if horizon <= 0:
+        raise ValueError("horizon must be positive")
     if failure_types is None:
         failure_types = ["motor", "battery"]
+    if not (0.0 <= p_fail <= 1.0):
+        raise ValueError("p_fail must be in [0, 1]")
+    if tau_s_range[0] <= 0 or tau_exec_range[0] <= 0:
+        raise ValueError("Durations must be >= 1 day")
+    if tau_s_range[0] > tau_s_range[1] or tau_exec_range[0] > tau_exec_range[1]:
+        raise ValueError("Invalid duration range")
 
+    # Sets
     I = [f"Fleet_{k+1}" for k in range(n_assets)]
     F = list(failure_types)
-    D = list(range(1, horizon + 1))
+    D = list(range(1, horizon + 1))  # days are already numeric (use d directly)
 
+    # Lead time
     LT = {i: int(rng.integers(0, 7)) for i in I}
 
+    # Setup duration tau_i^s
+    tau_s = {i: int(rng.integers(tau_s_range[0], tau_s_range[1] + 1)) for i in I}
+
+    # Setup costs
     setup_levels = np.arange(100, 501, 50)
     c_setup = {i: int(rng.choice(setup_levels)) for i in I}
 
+    # Asset-failure pairs
     IF = [(i, f) for i in I for f in F]
-    F_if = {k: int(rng.random() < p_fail) for k in IF}
 
-    RUL = {}
+    # In-horizon indicator F_if
+    F_if = {(i, f): int(rng.random() < p_fail) for (i, f) in IF}
+
+    # RUL (days)
+    RUL: dict[tuple[str, str], int] = {}
     for (i, f) in IF:
         RUL[(i, f)] = int(rng.integers(1, horizon + 1)) if F_if[(i, f)] == 1 else horizon + 1
 
-    # penalty weights (keep as before)
-    alpha = {k: int(rng.integers(10, 51)) for k in IF}
-    beta = {k: int(rng.integers(100, 201)) for k in IF}
-    gamma = {k: int(rng.integers(50, 101)) for k in IF}
+    # Execution duration tau_if
+    tau_exec = {(i, f): int(rng.integers(tau_exec_range[0], tau_exec_range[1] + 1)) for (i, f) in IF}
 
-    # NEW: mode costs
-    c_pr = {k: int(rng.integers(200, 501)) for k in IF}       # regular predictive
-    c_u_pr = {k: int(rng.integers(500, 901)) for k in IF}     # emergency predictive
-    c_re = {k: int(rng.integers(1500, 4001)) for k in IF}     # reactive
+    # Penalty weights
+    alpha = {(i, f): int(rng.integers(10, 51)) for (i, f) in IF}
+    beta = {(i, f): int(rng.integers(100, 201)) for (i, f) in IF}
 
-    # Ensure emergency predictive is (typically) more expensive than regular predictive
+    # Mode costs
+    c_pr = {(i, f): int(rng.integers(200, 501)) for (i, f) in IF}       # regular predictive
+    c_u_pr = {(i, f): int(rng.integers(500, 901)) for (i, f) in IF}     # urgent predictive
+    c_re = {(i, f): int(rng.integers(1500, 4001)) for (i, f) in IF}     # reactive
+
+    # Ensure urgent predictive is typically more expensive than regular predictive
     for k in IF:
         if c_u_pr[k] <= c_pr[k]:
             c_u_pr[k] = c_pr[k] + int(rng.integers(50, 301))
 
+    # Calendar/workdays
     if start_date is None:
         start_date = date.today()
 
@@ -388,8 +557,8 @@ def _base_data(
         except Exception:
             hol_cal = None
 
-    workday = {}
-    holiday_name = {}
+    workday: dict[int, int] = {}
+    holiday_name: dict[int, str] = {}
     for d in D:
         dt = start_date + timedelta(days=d - 1)
         is_weekend = dt.weekday() >= 5
@@ -398,30 +567,30 @@ def _base_data(
         workday[d] = 0 if (is_weekend or is_holiday) else 1
         holiday_name[d] = str(hol_cal.get(dt)) if is_holiday else ""
 
+    # Big-M baseline
+    M = float(horizon)
+
     return {
         "I": I,
         "F": F,
         "D": D,
-        "M": float(horizon),  # big-M baseline
-        "R": float(R),        # NEW capacity
+        "M": M,
+        "R": float(R),
         "LT": LT,
+        "tau_s": tau_s,           # tau_i^s
+        "tau_exec": tau_exec,     # tau_if
         "c_setup": c_setup,
         "RUL": RUL,
         "F_if": F_if,
         "alpha": alpha,
         "beta": beta,
-        "gamma": gamma,
-        "c_pr": c_pr,         # NEW
-        "c_u_pr": c_u_pr,     # NEW
-        "c_re": c_re,         # NEW
+        "c_pr": c_pr,
+        "c_u_pr": c_u_pr,
+        "c_re": c_re,
         "workday": workday,
         "start_date": start_date,
         "holiday_name": holiday_name,
     }
-
-
-
-
 
 def layout():
     card_style = {"border": "1px solid #ddd", "borderRadius": "12px", "padding": "16px"}
@@ -915,14 +1084,13 @@ def register_callbacks(app):
             rul = int(data["RUL"][(i, f)])
             lt = int(data["LT"][i])
 
-            planned_time = max(rul - lt, 0)  # <-- your requested formula
+            planned_time = max(rul - lt, 0)
 
-            # Map planned_time to scheduling day index in [1..horizon]
-            # If planned_time=0, schedule at day 1 (earliest possible).
             planned_day = max(1, min(int(planned_time), horizon))
-
-            # respect workday calendar
             planned_day = _shift_to_workday(planned_day, data["workday"], horizon)
+
+            # NEW: execution duration (workdays)
+            tau_exec = int(data["tau_exec"][(i, f)])
 
             rows.append(
                 {
@@ -930,6 +1098,7 @@ def register_callbacks(app):
                     "failure_f": f,
                     "planned_time": int(planned_time),
                     "planned_day_d": int(planned_day),
+                    "tau_exec": int(tau_exec),          # <-- NEW
                     "RUL_if": rul,
                     "LT_i": lt,
                 }
@@ -1011,25 +1180,100 @@ def register_callbacks(app):
             "total_cost": total_cost,
         }
 
-    def _check_capacity_infeasible(df_base: pd.DataFrame, R: int) -> tuple[bool, dict]:
+
+    def _check_capacity_infeasible(
+        df_base: pd.DataFrame,
+        R: int,
+        workday: dict[int, int],
+        horizon: int,
+        tau_exec_col: str = "tau_exec",      # column name in df_base, if present
+        start_col: str = "planned_day_d",    # start day column
+    ) -> tuple[bool, dict]:
         """
+        Capacity check consistent with the Pyomo constraint:
+        For each day d: (# of ONGOING executions on day d) <= R
+        where task durations are measured in WORKDAYS (weekends/holidays skipped).
+
         Returns (is_infeasible, details)
         details = {"max_day": int|None, "max_count": int, "days_over": {day:count}}
         """
         if df_base is None or df_base.empty:
             return False, {"max_day": None, "max_count": 0, "days_over": {}}
 
-        counts = df_base.groupby("planned_day_d").size().to_dict()
-        days_over = {int(d): int(c) for d, c in counts.items() if int(c) > int(R)}
+        # ensure we only consider valid numeric days
+        df = df_base.copy()
+        df = df[pd.notnull(df[start_col])]
+        if df.empty:
+            return False, {"max_day": None, "max_count": 0, "days_over": {}}
+
+        # Precompute the list of workdays in the horizon for fast stepping
+        D = list(range(1, int(horizon) + 1))
+        workdays_in_horizon = [d for d in D if int(workday.get(d, 0)) == 1]
+
+        # Helper: given a start day d0 and duration tau (workdays), return covered calendar days
+        def covered_days(d0: int, tau: int) -> list[int]:
+            if tau <= 0:
+                return []
+            if int(workday.get(d0, 0)) != 1:
+                # if starts must be workdays, treat as covering nothing (or raise)
+                return []
+            covered = []
+            wd_seen = 0
+            t = d0
+            while t <= horizon and wd_seen < tau:
+                if int(workday.get(t, 0)) == 1:
+                    wd_seen += 1
+                    covered.append(t)
+                t += 1
+            return covered
+
+        # Count ongoing executions per day
+        ongoing_count: dict[int, int] = {d: 0 for d in range(1, horizon + 1)}
+
+        for _, row in df.iterrows():
+            d0 = int(row[start_col])
+
+            # duration: read from column if exists; otherwise assume 1 (or change default)
+            if tau_exec_col in df.columns and pd.notnull(row[tau_exec_col]):
+                tau = int(row[tau_exec_col])
+            else:
+                tau = 1
+
+            for d in covered_days(d0, tau):
+                ongoing_count[d] += 1
+
+        # Find violations
+        days_over = {d: c for d, c in ongoing_count.items() if c > int(R)}
 
         if not days_over:
-            max_day = max(counts, key=counts.get) if counts else None
-            max_count = int(counts[max_day]) if max_day is not None else 0
+            # report max utilization day
+            max_day = max(ongoing_count, key=ongoing_count.get) if ongoing_count else None
+            max_count = int(ongoing_count[max_day]) if max_day is not None else 0
             return False, {"max_day": int(max_day) if max_day is not None else None, "max_count": max_count, "days_over": {}}
 
-        # pick the worst day
         worst_day = max(days_over, key=days_over.get)
-        return True, {"max_day": int(worst_day), "max_count": int(days_over[worst_day]), "days_over": days_over}
+        return True, {"max_day": int(worst_day), "max_count": int(days_over[worst_day]), "days_over": {int(k): int(v) for k, v in days_over.items()}}
+    
+    def _end_day_after_tau_workdays(start_day: int, tau: int, workday: dict[int, int], horizon: int) -> int:
+        """
+        Returns the calendar day index of the first day AFTER completing tau workdays,
+        starting from start_day (which is assumed to be a workday).
+        Example: if start_day=6 (Fri), tau=3 => covers 6,7,10, so end_day = 11 (day after 10).
+        """
+        if tau <= 0:
+            return max(1, min(horizon + 1, start_day))
+
+        d = int(start_day)
+        d = max(1, min(horizon, d))
+
+        wd_seen = 0
+        while d <= horizon and wd_seen < tau:
+            if int(workday.get(d, 0)) == 1:
+                wd_seen += 1
+            d += 1
+
+        # d is now the first day AFTER we counted tau workdays (or horizon+1 if it ran out)
+        return min(horizon + 1, d)
 
     # ---------------------------------------------------------
     # Run optimization + update KPIs + graphs + calendar + modal data
@@ -1067,14 +1311,18 @@ def register_callbacks(app):
 
             # --- build data FIRST (always) ---
             data = _base_data(
-                n_assets=int(shared_inputs.get("n_assets", 100)),
+                n_assets=int(shared_inputs.get("n_assets", 10)),
                 horizon=int(shared_inputs.get("horizon", 31)),
                 failure_types=shared_inputs.get("failure_types", ["motor", "battery"]),
                 p_fail=float(shared_inputs.get("p_fail", 0.5)),
                 seed=int(shared_inputs.get("seed", 42)),
                 holiday_country=str(shared_inputs.get("holiday_country", "BE")),
-                R=int(shared_inputs.get("R", 10)),
+                R=int(shared_inputs.get("R", 30)),
                 start_date=parsed_start,
+
+                # NEW (durations in WORKDAYS)
+                tau_s_range=tuple(shared_inputs.get("tau_s_range", (1, 3))),
+                tau_exec_range=tuple(shared_inputs.get("tau_exec_range", (1, 5))),
             )
 
 
@@ -1089,16 +1337,31 @@ def register_callbacks(app):
             # --- Baseline plan (always) ---
             df_base = _build_baseline_plan(data)
             base_counts = _baseline_counts_by_day(data, df_base)
-            is_infeasible, cap_info = _check_capacity_infeasible(df_base, int(data["R"]))
+            is_infeasible, cap_info = _check_capacity_infeasible(
+                df_base=df_base,
+                R=int(data["R"]),
+                workday=data["workday"],
+                horizon=len(data["D"]),
+                tau_exec_col="tau_exec",
+                start_col="planned_day_d",
+            )
             # baseline calendar events
             events = []
+            horizon = len(data["D"])
+
             if df_base is not None and not df_base.empty:
                 for _, r in df_base.iterrows():
-                    d = int(r["planned_day_d"])
-                    start_dt = data["start_date"] + timedelta(days=d - 1)
+                    d0 = int(r["planned_day_d"])
+                    tau = int(r["tau_exec"])
+
+                    start_dt = data["start_date"] + timedelta(days=d0 - 1)
+                    end_day = _end_day_after_tau_workdays(d0, tau, data["workday"], horizon)
+                    end_dt = data["start_date"] + timedelta(days=end_day - 1)  # because end_day is a day index
+
                     events.append({
                         "title": f"Baseline · {r['asset_i']} · {r['failure_f']} (planned={r['planned_time']})",
                         "start": start_dt.isoformat(),
+                        "end": end_dt.isoformat(),     # <-- NEW
                         "allDay": True,
                         "display": "auto",
                     })
@@ -1139,9 +1402,10 @@ def register_callbacks(app):
                     status = html.Div(
                         [
                             html.B("Initial plan infeasible. "),
-                            html.Span("Maintenance resource capacity exceeded. "),
-                            html.Span(f"Capacity R = {int(data['R'])} per day, but day {worst_day} has {worst_cnt} maintenances. "),
-                            html.Span("Adjust inputs or click Run Optimization to find a feasible schedule."),
+                            html.Span(
+                                f"Capacity R = {int(data['R'])} concurrent executions, "
+                                f"but day {worst_day} has {worst_cnt} ongoing executions. "
+                                ),
                         ],
                         style={"color": "#b00020"},
                     )
@@ -1184,24 +1448,30 @@ def register_callbacks(app):
             fig_stack = _build_stacked_fleets_figure(data, df_plan, baseline_counts=base_counts)
 
             # append optimized events
+            # append optimized events (execution spans tau_exec WORKDAYS)
+            horizon = len(data["D"])
             if df_plan is not None and not df_plan.empty:
                 for _, r in df_plan.iterrows():
-                    d = r.get("scheduled_day_d", None)
-                    if d is None or (isinstance(d, float) and pd.isna(d)):
+                    d0 = r.get("scheduled_day_d", None)
+                    if d0 is None or (isinstance(d0, float) and pd.isna(d0)):
                         continue
-                    start_dt = data["start_date"] + timedelta(days=int(d) - 1)
+
+                    d0 = int(d0)
+                    i = r["asset_i"]
+                    f = r["failure_f"]
+                    tau = int(data["tau_exec"][(i, f)])
+
+                    start_dt = data["start_date"] + timedelta(days=d0 - 1)
+                    end_day = _end_day_after_tau_workdays(d0, tau, data["workday"], horizon)
+                    end_dt = data["start_date"] + timedelta(days=end_day - 1)
+
                     events.append({
-                        "title": f"Optimized · {r['asset_i']} · {r['failure_f']} ({r['mode']})",
+                        "title": f"Optimized · {i} · {f} ({r['mode']})",
                         "start": start_dt.isoformat(),
+                        "end": end_dt.isoformat(),     # <-- NEW
                         "allDay": True,
                         "display": "auto",
                     })
-
-            status = html.Div([
-                html.Span("Solved successfully. "),
-                html.Span(f"Solver: {solver_name}. "),
-                html.Span("Termination: optimal/feasible."),
-            ])
 
             links = html.Div(
                 style={"display": "flex", "gap": "10px", "alignItems": "center", "flexWrap": "wrap"},
@@ -1213,7 +1483,11 @@ def register_callbacks(app):
                     ),
                 ],
             )
-
+            status = html.Div([
+                html.Span("Solved successfully. "),
+                html.Span(f"Solver: {solver_name}. "),
+                html.Span("Termination: optimal/feasible."),
+            ])
             return (
                 status,
                 f"Objective value: {float(obj):,.4f}",
