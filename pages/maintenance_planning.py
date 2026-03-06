@@ -1974,7 +1974,7 @@ def register_callbacks(app):
                         # colors
                         "backgroundColor": exec_bg,
                         "borderColor": exec_bg,
-                        "textColor": "#ffffff",
+                        "textColor": "#000000",
 
                         # optional: make optimized visually “stronger”
                         # (FullCalendar supports this via extendedProps + eventDidMount if you want,
@@ -2006,7 +2006,7 @@ def register_callbacks(app):
                         # setup color
                         "backgroundColor": setup_color,
                         "borderColor": setup_color,
-                        "textColor": "#ffffff",
+                        "textColor": "#000000",
                     })
 
             links = html.Div(
