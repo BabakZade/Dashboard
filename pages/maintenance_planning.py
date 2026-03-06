@@ -1845,7 +1845,7 @@ def register_callbacks(app):
                         "display": "auto",
                         "backgroundColor": setup_color,
                         "borderColor": setup_color,
-                        "textColor": "#ffffff",
+                        "textColor": "#000000",
                     })
             # ---- KPIs that can be shown even before optimization ----
             n_assets = len(data["I"])
