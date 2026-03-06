@@ -10,6 +10,7 @@ import pyomo.environ as pyo
 from datetime import date, timedelta
 import full_calendar_component as fcc
 from pathlib import Path
+import hashlib
 
 
 from dash.exceptions import PreventUpdate
@@ -38,7 +39,10 @@ except Exception:
 
 import pyomo.environ as pyo
 
-
+DEFAULT_PALETTE = [
+    "#a6cee3", "#b2df8a", "#fb9a99", "#fdbf6f", "#cab2d6", "#ffff99",
+    "#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a", "#b15928",
+]
 
 # ---------------------------
 # Pyomo model (WORKDAY-BASED DURATIONS)
@@ -167,10 +171,14 @@ def build_model(data: dict) -> pyo.ConcreteModel:
 
     # (C1) Scheduling within horizon:
     #   sum_{d in D} x_{i,f,d} = F_if(i,f)   for all (i,f)
-    def schedule_rule(m, i, f):
+    def schedule_x_rule(m, i, f):
         return sum(m.x[i, f, d] for d in m.D) == m.F_if[i, f]
+    m.ScheduleX = pyo.Constraint(m.IF, rule=schedule_x_rule)
 
-    m.Schedule = pyo.Constraint(m.IF, rule=schedule_rule)
+    #   sum_{d in D} y_{i,f,d} <= F_if(i,f)   for all (i,f)
+    def schedule_y_rule(m, i, f):
+        return sum(m.y[i, f, d] for d in m.D) <= m.F_if[i, f]
+    m.ScheduleY = pyo.Constraint(m.IF, rule=schedule_y_rule)
 
     # (C10) Workday restriction for execution starts:
     #   x_{i,f,d} <= workday_d   for all (i,f,d)
@@ -312,6 +320,8 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     # (C5) Define phi (lateness / downtime):
     #   sum_{d in D} d*x_{i,f,d} - RUL_{i,f} <= phi_{i,f}
     def phi_def_rule(m, i, f):
+        if pyo.value(m.F_if[i, f]) == 0:
+            return pyo.Constraint.Skip
         return sum(d * m.x[i, f, d] for d in m.D) - m.RUL[i, f] <= m.phi[i, f]
 
     m.PhiDef = pyo.Constraint(m.IF, rule=phi_def_rule)
@@ -319,6 +329,8 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     # (C6) Define psi (earliness / unused RUL):
     #   (RUL_{i,f} - LT_i) - sum_{d in D} d*x_{i,f,d} <= psi_{i,f}
     def psi_def_rule(m, i, f):
+        if pyo.value(m.F_if[i, f]) == 0:
+            return pyo.Constraint.Skip
         return (m.RUL[i, f] - m.LT[i]) - sum(d * m.x[i, f, d] for d in m.D) <= m.psi[i, f]
 
     m.PsiDef = pyo.Constraint(m.IF, rule=psi_def_rule)
@@ -326,6 +338,8 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     # (C7) Big-M activation for reactive mode:
     #   phi_{i,f} <= M * l_{i,f}
     def reactive_activation_rule(m, i, f):
+        if pyo.value(m.F_if[i, f]) == 0:
+            return pyo.Constraint.Skip
         return m.phi[i, f] <= m.M * m.l[i, f]
 
     m.ReactiveActivation = pyo.Constraint(m.IF, rule=reactive_activation_rule)
@@ -333,6 +347,8 @@ def build_model(data: dict) -> pyo.ConcreteModel:
     # (C8) Big-M activation for regular predictive mode:
     #   psi_{i,f} <= M * e_{i,f}
     def regular_activation_rule(m, i, f):
+        if pyo.value(m.F_if[i, f]) == 0:
+            return pyo.Constraint.Skip
         return m.psi[i, f] <= m.M * m.e[i, f]
 
     m.RegularActivation = pyo.Constraint(m.IF, rule=regular_activation_rule)
@@ -350,107 +366,137 @@ def build_model(data: dict) -> pyo.ConcreteModel:
 def solve_instance(data: dict, solver_name: str) -> tuple[float, pd.DataFrame, pd.DataFrame, dict]:
     model = build_model(data)
 
-    # Optional: export model for debugging
-    
-
-    # Write .lp
+    # --- export model for debugging ---
     lp_path = ASSETS_DIR / "maintenance_model.lp"
     model.write(str(lp_path), io_options={"symbolic_solver_labels": True})
 
-    # Write a .txt copy so browsers reliably show it as text
     txt_path = ASSETS_DIR / "maintenance_model.txt"
     txt_path.write_text(lp_path.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
 
+    # --- solve ---
     solver = pyo.SolverFactory(solver_name)
     if (solver is None) or (not solver.available(False)):
-        raise RuntimeError(f"Solver '{solver_name}' not available. Install it (glpk/cbc/highs) or switch solver.")
+        raise RuntimeError(
+            f"Solver '{solver_name}' not available. Install it (glpk/cbc/highs) or switch solver."
+        )
 
     res = solver.solve(model, tee=True)
 
-    term = str(res.solver.termination_condition).lower()
-    if term not in {"optimal", "feasible"}:
-        raise RuntimeError(f"Solver status: {res.solver.termination_condition}")
+    tc = res.solver.termination_condition
+    tc_str = str(tc).lower()
+
+    # Accept optimal OR feasible (some solvers return 'feasible' for MIP when stopped early)
+    if not (("optimal" in tc_str) or ("feasible" in tc_str)):
+        raise RuntimeError(f"Solver status: {tc}")
+
+    # --- helper: safe value extraction ---
+    def val(x, default=0.0):
+        v = pyo.value(x, exception=False)
+        return default if v is None else v
+
+    # --- plan dataframe ---
+    plan_cols = [
+        "asset_i", "failure_f", "scheduled_day_d",
+        "RUL_if", "LT_i", "phi_if", "psi_if", "mode"
+    ]
 
     rows = []
+    # Some quick diagnostics about IF / F_if
+    n_if = 0
+    n_active_if = 0
+
     for (i, f) in model.IF:
-        if pyo.value(model.F_if[i, f]) < 0.5:
+        
+        n_if += 1
+        if val(model.F_if[i, f], default=0.0) < 0.5:
             continue
+        n_active_if += 1
 
         chosen = None
         for d in model.D:
-            if pyo.value(model.x[i, f, d]) > 0.5:
+            if val(model.x[i, f, d], default=0.0) > 0.5:
                 chosen = int(d)
                 break
 
         mode = (
-            "Regular predictive" if pyo.value(model.e[i, f]) > 0.5 else
-            "Reactive" if pyo.value(model.l[i, f]) > 0.5 else
-            "Emergency predictive" if pyo.value(model.u[i, f]) > 0.5 else
+            "Regular predictive" if val(model.e[i, f], 0.0) > 0.5 else
+            "Reactive" if val(model.l[i, f], 0.0) > 0.5 else
+            "Emergency predictive" if val(model.u[i, f], 0.0) > 0.5 else
             "None"
         )
 
-        rows.append(
-            {
-                "asset_i": i,
-                "failure_f": f,
-                "scheduled_day_d": chosen,
-                "RUL_if": float(pyo.value(model.RUL[i, f])),
-                "LT_i": float(pyo.value(model.LT[i])),
-                "phi_if": float(pyo.value(model.phi[i, f])),  # NEW
-                "psi_if": float(pyo.value(model.psi[i, f])),  # NEW
-                "mode": mode,
-            }
-        )
+        rows.append({
+            "asset_i": i,
+            "failure_f": f,
+            "scheduled_day_d": chosen,
+            "RUL_if": float(val(model.RUL[i, f], default=0.0)),
+            "LT_i": float(val(model.LT[i], default=0.0)),
+            "phi_if": float(val(model.phi[i, f], default=0.0)),
+            "psi_if": float(val(model.psi[i, f], default=0.0)),
+            "mode": mode,
+        })
 
-    df_plan = pd.DataFrame(rows).sort_values(["asset_i", "failure_f"], ignore_index=True)
+    df_plan = pd.DataFrame(rows, columns=plan_cols)
+    if not df_plan.empty:
+        df_plan = df_plan.sort_values(["asset_i", "failure_f"], ignore_index=True)
 
+    # --- setup dataframe ---
+    setup_cols = ["asset_i", "failure_f", "setup_day_d", "setup_cost"]
     setup_rows = []
+
     for i in model.I:
         for f in model.F:
             for d in model.D:
-                if pyo.value(model.y[i, f, d]) > 0.5:
+                if val(model.y[i, f, d], default=0.0) > 0.5:
                     setup_rows.append({
                         "asset_i": i,
                         "failure_f": f,
                         "setup_day_d": int(d),
-                        "setup_cost": float(pyo.value(model.c_setup[i])),
+                        "setup_cost": float(val(model.c_setup[i], default=0.0)),
                     })
 
-    df_setup = pd.DataFrame(setup_rows).sort_values(["asset_i", "setup_day_d", "failure_f"], ignore_index=True)
+    df_setup = pd.DataFrame(setup_rows, columns=setup_cols)
+    if not df_setup.empty:
+        df_setup = df_setup.sort_values(["asset_i", "setup_day_d", "failure_f"], ignore_index=True)
 
-    # --- cost components (UPDATED) ---
+    # --- cost components ---
     setup_cost_val = float(
         sum(
-            pyo.value(model.c_setup[i]) * pyo.value(model.y[i, f, d])
+            val(model.c_setup[i], 0.0) * val(model.y[i, f, d], 0.0)
             for i in model.I
             for f in model.F
             for d in model.D
         )
     )
-    # penalties
+
     phi_cost_val = float(
-        sum(pyo.value(model.alpha[i, f]) * pyo.value(model.phi[i, f]) for (i, f) in model.IF)
+        sum(val(model.alpha[i, f], 0.0) * val(model.phi[i, f], 0.0) for (i, f) in model.IF)
     )
     psi_cost_val = float(
-        sum(pyo.value(model.beta[i, f]) * pyo.value(model.psi[i, f]) for (i, f) in model.IF)
+        sum(val(model.beta[i, f], 0.0) * val(model.psi[i, f], 0.0) for (i, f) in model.IF)
     )
     penalty_cost_val = phi_cost_val + psi_cost_val
 
-    # mode costs
     regular_mode_cost_val = float(
-        sum(pyo.value(model.c_pr[i, f]) * pyo.value(model.e[i, f]) for (i, f) in model.IF)
+        sum(val(model.c_pr[i, f], 0.0) * val(model.e[i, f], 0.0) for (i, f) in model.IF)
     )
     emergency_mode_cost_val = float(
-        sum(pyo.value(model.c_u_pr[i, f]) * pyo.value(model.u[i, f]) for (i, f) in model.IF)
+        sum(val(model.c_u_pr[i, f], 0.0) * val(model.u[i, f], 0.0) for (i, f) in model.IF)
     )
     reactive_mode_cost_val = float(
-        sum(pyo.value(model.c_re[i, f]) * pyo.value(model.l[i, f]) for (i, f) in model.IF)
+        sum(val(model.c_re[i, f], 0.0) * val(model.l[i, f], 0.0) for (i, f) in model.IF)
     )
     mode_cost_val = regular_mode_cost_val + emergency_mode_cost_val + reactive_mode_cost_val
 
     total_cost_val = setup_cost_val + penalty_cost_val + mode_cost_val
 
     summary = {
+        "termination_condition": str(tc),
+
+        # helpful diagnostics
+        "n_if_pairs": int(n_if),
+        "n_active_if_pairs": int(n_active_if),
+
         "setup_cost": setup_cost_val,
 
         "phi_penalty_cost": phi_cost_val,
@@ -464,13 +510,21 @@ def solve_instance(data: dict, solver_name: str) -> tuple[float, pd.DataFrame, p
 
         "total_cost": total_cost_val,
 
-        "n_regular": int(sum(1 for (i, f) in model.IF if pyo.value(model.e[i, f]) > 0.5)),
-        "n_emergency": int(sum(1 for (i, f) in model.IF if pyo.value(model.u[i, f]) > 0.5)),
-        "n_reactive": int(sum(1 for (i, f) in model.IF if pyo.value(model.l[i, f]) > 0.5)),
+        "n_regular": int(sum(1 for (i, f) in model.IF if val(model.e[i, f], 0.0) > 0.5)),
+        "n_emergency": int(sum(1 for (i, f) in model.IF if val(model.u[i, f], 0.0) > 0.5)),
+        "n_reactive": int(sum(1 for (i, f) in model.IF if val(model.l[i, f], 0.0) > 0.5)),
     }
 
-    obj = float(pyo.value(model.OBJ))
+    obj_val = val(model.OBJ, default=None)
+    if obj_val is None:
+        # extremely rare if solver reports feasible but no values were loaded
+        raise RuntimeError("Solver returned feasible/optimal but objective value is None (solution not loaded).")
+
+    obj = float(obj_val)
     return obj, df_plan, df_setup, summary
+
+
+
 # ---------------------------
 # Data generator
 # ---------------------------
@@ -591,6 +645,231 @@ def _base_data(
         "start_date": start_date,
         "holiday_name": holiday_name,
     }
+
+
+def build_base_plan(data: dict) -> tuple[float, pd.DataFrame, pd.DataFrame, dict]:
+    """
+    Baseline plan with durations + setup:
+    - For each asset: pick earliest planned failure as anchor.
+    - Schedule ONE setup before the first execution.
+    - Schedule all failures for that asset back-to-back (ignore capacity).
+    - Return (obj, df_plan, df_setup, summary) like solve_instance().
+    """
+
+    days = sorted(list(map(int, data["D"])))
+    if not days:
+        raise ValueError("data['D'] is empty")
+
+    horizon = len(days)
+    day_min, day_max = days[0], days[-1]
+    workday = data["workday"]  # dict day->0/1
+
+    # -----------------------------
+    # helpers (workday-based)
+    # -----------------------------
+    def _shift_to_workday(d_int: int) -> int:
+        """If day is not workday, move forward to next workday; if none, move backward."""
+        d = int(d_int)
+        d = max(1, min(horizon, d))
+
+        dd = d
+        while dd <= horizon and int(workday.get(dd, 1)) == 0:
+            dd += 1
+        if dd <= horizon:
+            return dd
+
+        dd = d
+        while dd >= 1 and int(workday.get(dd, 1)) == 0:
+            dd -= 1
+        return max(1, dd)
+
+    def _t1_working_days_before(the_day: int, t1: int) -> int | None:
+        """Return calendar day that is t1 WORKDAYS strictly before the_day; None if doesn't exist."""
+        if t1 <= 0:
+            return int(the_day)
+
+        day = int(the_day)
+        remaining = int(t1)
+        while remaining > 0:
+            day -= 1
+            if day < 1:
+                return None
+            if int(workday.get(day, 0)) == 1:
+                remaining -= 1
+        return day
+
+    def _end_day_after_tau_workdays(start_day: int, tau: int) -> int:
+        """
+        Returns the calendar day index of the first day AFTER completing tau workdays,
+        starting from start_day (assumed workday). Clipped to horizon+1.
+        """
+        if tau <= 0:
+            return max(1, min(horizon + 1, int(start_day)))
+
+        d = max(1, min(horizon, int(start_day)))
+        wd_seen = 0
+        while d <= horizon and wd_seen < tau:
+            if int(workday.get(d, 0)) == 1:
+                wd_seen += 1
+            d += 1
+        return min(horizon + 1, d)  # day AFTER finishing
+
+    # -----------------------------
+    # Build baseline schedule
+    # -----------------------------
+    plan_rows = []
+    setup_rows = []
+
+    # Pre-collect active failures per asset
+    F = list(data["F"])
+    I = list(data["I"])
+
+    for i in I:
+        active_fs = [f for f in F if int(data["F_if"].get((i, f), 0)) == 1]
+        if not active_fs:
+            continue
+
+        lt = int(data["LT"][i])
+        tau_s_i = int(data["tau_s"][i])
+
+        # compute baseline "desired day" per failure, choose earliest as anchor
+        candidates = []
+        for f in active_fs:
+            rul = int(data["RUL"][(i, f)])
+            planned_time = max(rul - lt, 0)
+            planned_day = max(1, min(int(planned_time), horizon))
+            planned_day = _shift_to_workday(planned_day)
+            candidates.append((planned_day, planned_time, f))
+
+        candidates.sort(key=lambda x: (x[0], str(x[2])))
+        first_planned_day, first_planned_time, f_first = candidates[0]
+
+        # schedule setup before first execution (workdays-before)
+        setup_start = _t1_working_days_before(first_planned_day, tau_s_i)
+        if setup_start is None:
+            # not enough history -> start at first available workday
+            setup_start = _shift_to_workday(1)
+        else:
+            setup_start = _shift_to_workday(setup_start)
+
+        setup_rows.append({
+            "asset_i": i,
+            "failure_f": f_first,  # associate setup with anchor failure
+            "setup_day_d": int(setup_start),
+            "setup_cost": float(data["c_setup"][i]),
+        })
+
+        # execution starts after setup completes, next workday
+        exec_start_candidate = _end_day_after_tau_workdays(setup_start, tau_s_i)
+        if exec_start_candidate > horizon:
+            # if setup pushes beyond horizon, just clamp (still returns something)
+            exec_start_candidate = horizon
+        current_start = _shift_to_workday(exec_start_candidate)
+
+        # schedule failures back-to-back in the chosen order (earliest planned day first)
+        for planned_day, planned_time, f in candidates:
+            start_d = int(current_start)
+            if start_d < 1:
+                start_d = 1
+            if start_d > horizon:
+                start_d = horizon
+            start_d = _shift_to_workday(start_d)
+
+            tau_exec_if = int(data["tau_exec"][(i, f)])
+            end_after = _end_day_after_tau_workdays(start_d, tau_exec_if)
+
+            rul = int(data["RUL"][(i, f)])
+            # phi / psi definitions consistent with your baseline_costs
+            phi = max(start_d - rul, 0)
+            psi = max((rul - lt) - start_d, 0)
+
+            mode = "Reactive" if phi > 0 else "Regular predictive"
+
+            plan_rows.append({
+                "asset_i": i,
+                "failure_f": f,
+                "scheduled_day_d": int(start_d),
+                "RUL_if": float(rul),
+                "LT_i": float(lt),
+                "phi_if": float(phi),
+                "psi_if": float(psi),
+                "mode": mode,
+            })
+
+            # next task starts the day after this one completes
+            next_start = end_after
+            if next_start > horizon:
+                next_start = horizon
+            current_start = _shift_to_workday(next_start)
+
+    # Ensure stable schema even if empty
+    plan_cols = ["asset_i", "failure_f", "scheduled_day_d", "RUL_if", "LT_i", "phi_if", "psi_if", "mode"]
+    setup_cols = ["asset_i", "failure_f", "setup_day_d", "setup_cost"]
+
+    df_plan = pd.DataFrame(plan_rows, columns=plan_cols)
+    if not df_plan.empty:
+        df_plan = df_plan.sort_values(["asset_i", "failure_f"], ignore_index=True)
+
+    df_setup = pd.DataFrame(setup_rows, columns=setup_cols)
+    if not df_setup.empty:
+        df_setup = df_setup.sort_values(["asset_i", "setup_day_d", "failure_f"], ignore_index=True)
+
+    # -----------------------------
+    # Costs + "objective"
+    # -----------------------------
+    setup_cost_val = float(df_setup["setup_cost"].sum()) if not df_setup.empty else 0.0
+
+    phi_cost_val = 0.0
+    psi_cost_val = 0.0
+    regular_mode_cost_val = 0.0
+    emergency_mode_cost_val = 0.0  # baseline uses none
+    reactive_mode_cost_val = 0.0
+
+    if not df_plan.empty:
+        for _, r in df_plan.iterrows():
+            i = r["asset_i"]
+            f = r["failure_f"]
+            phi = float(r["phi_if"])
+            psi = float(r["psi_if"])
+
+            phi_cost_val += float(data["alpha"][(i, f)]) * phi
+            psi_cost_val += float(data["beta"][(i, f)]) * psi
+
+            if r["mode"] == "Reactive":
+                reactive_mode_cost_val += float(data["c_re"][(i, f)])
+            else:
+                regular_mode_cost_val += float(data["c_pr"][(i, f)])
+
+    penalty_cost_val = float(phi_cost_val + psi_cost_val)
+    mode_cost_val = float(regular_mode_cost_val + emergency_mode_cost_val + reactive_mode_cost_val)
+    total_cost_val = float(setup_cost_val + penalty_cost_val + mode_cost_val)
+
+    summary = {
+        "termination_condition": "baseline",
+
+        "n_if_pairs": int(len(data["I"]) * len(data["F"])),
+        "n_active_if_pairs": int(sum(int(v) for v in data["F_if"].values())),
+
+        "setup_cost": setup_cost_val,
+
+        "phi_penalty_cost": float(phi_cost_val),
+        "psi_penalty_cost": float(psi_cost_val),
+        "penalty_cost": penalty_cost_val,
+
+        "regular_mode_cost": float(regular_mode_cost_val),
+        "emergency_mode_cost": float(emergency_mode_cost_val),
+        "reactive_mode_cost": float(reactive_mode_cost_val),
+        "mode_cost": mode_cost_val,
+
+        "total_cost": total_cost_val,
+
+        "n_regular": int((df_plan["mode"] == "Regular predictive").sum()) if not df_plan.empty else 0,
+        "n_emergency": 0,
+        "n_reactive": int((df_plan["mode"] == "Reactive").sum()) if not df_plan.empty else 0,
+    }
+
+    obj = total_cost_val
+    return obj, df_plan, df_setup, summary
 
 def layout():
     card_style = {"border": "1px solid #ddd", "borderRadius": "12px", "padding": "16px"}
@@ -861,6 +1140,11 @@ def layout():
 
                     html.Hr(style={"margin": "16px 0"}),
 
+                    html.H4("Gantt", style={"margin": "10px 0"}),
+                    dcc.Graph(id="mp-gantt-graph", figure={}, config={"displayModeBar": False}),
+
+                    html.Hr(style={"margin": "16px 0"}),
+
                     html.H4("Maintenance Calendar", style={"margin": "10px 0"}),
                     html.Div(
                         style={"marginTop": "10px"},
@@ -890,6 +1174,51 @@ def layout():
 
 def register_callbacks(app):
 
+    def build_color_config(data: dict, palette: list[str] | None = None):
+        """
+        Uses ONLY colors from `palette`.
+
+        Returns:
+        fault_colors: dict[failure_type -> hex]
+        setup_color: hex
+        exec_default_color: hex (fallback if f missing)
+        multi_fault_color: hex
+        """
+        if palette is None or len(palette) == 0:
+            raise ValueError("palette must be a non-empty list of hex colors")
+
+        failure_types = list(data.get("F", []))
+        nF = len(failure_types)
+        nP = len(palette)
+
+        # 1) fault colors (use as many as needed; cycle if palette shorter)
+        fault_colors = {}
+        for idx, f in enumerate(failure_types):
+            fault_colors[f] = palette[idx % nP]
+
+        # 2) special colors (take subsequent palette positions)
+        # Prefer distinct colors by stepping forward if we collide.
+        used = set(fault_colors.values())
+
+        def pick_color(start_idx: int) -> str:
+            # Try a full loop to find a not-yet-used color
+            for k in range(nP):
+                c = palette[(start_idx + k) % nP]
+                if c not in used:
+                    used.add(c)
+                    return c
+            # If all colors are used (small palette), just cycle
+            c = palette[start_idx % nP]
+            used.add(c)
+            return c
+
+        setup_color = pick_color(nF + 0)
+        exec_default_color = pick_color(nF + 1)
+        multi_fault_color = pick_color(nF + 2)
+
+        return fault_colors, setup_color, exec_default_color, multi_fault_color
+
+
     def _fmt_money(x):
         try:
             return f"{float(x):,.2f}"
@@ -898,23 +1227,66 @@ def register_callbacks(app):
 
     def _build_cashflow_figure(
         data: dict,
-        df_plan: pd.DataFrame,
-        df_setup: pd.DataFrame,
+        df_plan: pd.DataFrame | None,
+        df_setup: pd.DataFrame | None,
         baseline_counts: dict[int, int] | None = None,
-    ) -> dict:
-        days = list(map(int, data["D"]))
+        *,
+        exec_color: str = "#1f77b4",
+        baseline_color: str = "#7f7f7f",
+    ):
+        days = sorted(list(map(int, data["D"])))
+        if not days:
+            raise ValueError("data['D'] is empty")
+
+        day_min, day_max = days[0], days[-1]
         day_cost = {int(d): 0.0 for d in days}
 
-        # setup costs by setup_day_d
+        tau_s = data.get("tau_s", {})          # expects tau_s[i] (workdays)
+        tau_exec = data.get("tau_exec", {})    # expects tau_exec[(i,f)] (workdays)
+
+        def _add_cost_over_window(start_day: int, duration: int, total_cost: float):
+            """Spread total_cost uniformly over [start_day, start_day+duration-1], clipped to horizon."""
+            if start_day is None:
+                return
+            d0 = int(start_day)
+            dur = int(duration) if duration is not None else 0
+            if dur <= 0:
+                if day_min <= d0 <= day_max:
+                    day_cost[d0] += float(total_cost)
+                return
+
+            d1 = d0 + dur - 1
+            win_start = max(d0, day_min)
+            win_end = min(d1, day_max)
+            if win_start > win_end:
+                return
+
+            n = win_end - win_start + 1
+            per_day = float(total_cost) / float(n) if n > 0 else 0.0
+            for d in range(win_start, win_end + 1):
+                day_cost[d] += per_day
+
+        # -----------------------
+        # 1) setup costs
+        # -----------------------
         if df_setup is not None and not df_setup.empty:
             for _, r in df_setup.iterrows():
+                i = r["asset_i"]
                 d = int(r["setup_day_d"])
-                day_cost[d] += float(r.get("setup_cost", 0.0))
+                setup_cost = float(r.get("setup_cost", 0.0))
+                dur = int(tau_s.get(i, 0))  # no default_setup_duration used
+                _add_cost_over_window(d, dur, setup_cost)
 
-        # per (i,f) costs by scheduled_day_d:
+        # -----------------------
+        # 2) execution-related costs (penalty + mode)
+        # -----------------------
         if df_plan is not None and not df_plan.empty:
             for _, r in df_plan.iterrows():
-                d = int(r["scheduled_day_d"])
+                d = r.get("scheduled_day_d", None)
+                if d is None or pd.isna(d):
+                    continue
+                d = int(d)
+
                 i = r["asset_i"]
                 f = r["failure_f"]
 
@@ -933,15 +1305,24 @@ def register_callbacks(app):
                 else:
                     mode_cost = 0.0
 
-                day_cost[d] += penalty + mode_cost
+                total_exec_cost = penalty + mode_cost
+                dur = int(tau_exec.get((i, f), 0))
+                _add_cost_over_window(d, dur, total_exec_cost)
 
+        # -----------------------
+        # Build figure
+        # -----------------------
         fig = go.Figure()
 
-        # only add bars if there is something to show
-        if (df_setup is not None and not df_setup.empty) or (df_plan is not None and not df_plan.empty):
-            fig.add_bar(x=days, y=[day_cost[int(d)] for d in days], name="Optimized daily cost")
+        has_bars = any(abs(day_cost[int(d)]) > 1e-12 for d in days)
+        if has_bars:
+            fig.add_bar(
+                x=days,
+                y=[day_cost[int(d)] for d in days],
+                name="Optimized daily cost (spread)",
+                marker=dict(color=exec_color),
+            )
 
-        # Baseline overlay: planned jobs per day (pre-optimizer)
         if baseline_counts is not None:
             fig.add_scatter(
                 x=days,
@@ -949,6 +1330,8 @@ def register_callbacks(app):
                 mode="lines+markers",
                 name="Baseline planned jobs (pre-optimizer)",
                 yaxis="y2",
+                line=dict(color=baseline_color),
+                marker=dict(color=baseline_color),
             )
 
         fig.update_layout(
@@ -959,7 +1342,6 @@ def register_callbacks(app):
             legend=dict(orientation="h"),
         )
 
-        # If baseline is shown, add a 2nd axis
         if baseline_counts is not None:
             fig.update_layout(
                 yaxis2=dict(
@@ -970,27 +1352,171 @@ def register_callbacks(app):
                 )
             )
 
-        return fig          
+        return fig
 
+
+   
+    def _build_gantt_figure(
+        data: dict,
+        df_plan: pd.DataFrame | None,
+        df_setup: pd.DataFrame | None,
+        *,
+        setup_color: str = "#ff7f0e",
+        exec_color: str = "#1f77b4",
+    ) -> dict:
+        days = sorted(list(map(int, data["D"])))
+        if not days:
+            raise ValueError("data['D'] is empty")
+        day_min, day_max = days[0], days[-1]
+
+        tau_s = data.get("tau_s", {})
+        tau_exec = data.get("tau_exec", {})
+
+        tasks = []
+
+        if df_setup is not None and not df_setup.empty:
+            for _, r in df_setup.iterrows():
+                i = r["asset_i"]
+                f = r.get("failure_f", None)
+                start = r.get("setup_day_d", None)
+                if start is None or pd.isna(start):
+                    continue
+                start = int(start)
+
+                dur = int(tau_s.get(i, 0))
+                if dur <= 0:
+                    dur = 1
+                end = start + dur - 1
+
+                s = max(start, day_min)
+                e = min(end, day_max)
+                if s > e:
+                    continue
+
+                tasks.append({"asset_i": i, "kind": "Setup", "failure_f": f, "start": s, "end": e})
+
+        if df_plan is not None and not df_plan.empty:
+            for _, r in df_plan.iterrows():
+                i = r["asset_i"]
+                f = r["failure_f"]
+                start = r.get("scheduled_day_d", None)
+                if start is None or pd.isna(start):
+                    continue
+                start = int(start)
+
+                dur = int(tau_exec.get((i, f), 0))
+                if dur <= 0:
+                    dur = 1
+                end = start + dur - 1
+
+                s = max(start, day_min)
+                e = min(end, day_max)
+                if s > e:
+                    continue
+
+                tasks.append({"asset_i": i, "kind": "Exec", "failure_f": f, "start": s, "end": e})
+
+        fig = go.Figure()
+
+        if not tasks:
+            fig.update_layout(
+                margin=dict(l=10, r=10, t=10, b=10),
+                xaxis_title="Day",
+                yaxis_title=None,
+                xaxis=dict(range=[day_min - 0.5, day_max + 0.5]),
+            )
+            return fig
+
+        df_tasks = pd.DataFrame(tasks)
+        assets = sorted(df_tasks["asset_i"].unique().tolist())
+
+        # Setup trace
+        sub = df_tasks[df_tasks["kind"] == "Setup"]
+        if not sub.empty:
+            fig.add_trace(
+                go.Bar(
+                    y=sub["asset_i"],
+                    x=(sub["end"] - sub["start"] + 1),
+                    base=sub["start"],
+                    orientation="h",
+                    name="Setup",
+                    marker=dict(color=setup_color),
+                    customdata=sub[["failure_f", "start", "end"]].to_numpy(),
+                    hovertemplate=(
+                        "Asset: %{y}<br>"
+                        "Type: Setup<br>"
+                        "Failure: %{customdata[0]}<br>"
+                        "Start: %{customdata[1]}<br>"
+                        "End: %{customdata[2]}<extra></extra>"
+                    ),
+                )
+            )
+
+        # Exec trace
+        sub = df_tasks[df_tasks["kind"] == "Exec"]
+        if not sub.empty:
+            fig.add_trace(
+                go.Bar(
+                    y=sub["asset_i"],
+                    x=(sub["end"] - sub["start"] + 1),
+                    base=sub["start"],
+                    orientation="h",
+                    name="Exec",
+                    marker=dict(color=exec_color),
+                    customdata=sub[["failure_f", "start", "end"]].to_numpy(),
+                    hovertemplate=(
+                        "Asset: %{y}<br>"
+                        "Type: Exec<br>"
+                        "Failure: %{customdata[0]}<br>"
+                        "Start: %{customdata[1]}<br>"
+                        "End: %{customdata[2]}<extra></extra>"
+                    ),
+                )
+            )
+
+        fig.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_title="Day",
+            yaxis_title=None,
+            barmode="overlay",
+            legend=dict(orientation="h"),
+            xaxis=dict(range=[day_min - 0.5, day_max + 0.5], dtick=1),
+            yaxis=dict(
+                categoryorder="array",
+                categoryarray=assets,
+                showticklabels=False,
+                ticks="",
+                showgrid=False,
+            ),
+        )
+        return fig
 
     def _build_stacked_fleets_figure(
         data: dict,
         df_plan: pd.DataFrame,
         baseline_counts: dict[int, int] | None = None,
+        *,
+        fault_colors: dict[str, str] | None = None,
+        multi_fault_color: str = "#9467bd",
+        baseline_color: str = "#7f7f7f",
     ) -> dict:
         days = list(map(int, data["D"]))
         failure_types = list(data["F"])
 
+        # fallback if not provided
+        fault_colors = fault_colors or {}
+
         fig = go.Figure()
 
         if df_plan is None or df_plan.empty:
-            # still show baseline if available
             if baseline_counts is not None:
                 fig.add_scatter(
                     x=days,
                     y=[baseline_counts.get(int(d), 0) for d in days],
                     mode="lines+markers",
                     name="Baseline planned jobs (pre-optimizer)",
+                    line=dict(color=baseline_color),
+                    marker=dict(color=baseline_color),
                 )
             fig.update_layout(
                 margin=dict(l=10, r=10, t=10, b=10),
@@ -1006,22 +1532,40 @@ def register_callbacks(app):
         multi_assets_per_day = {d: set() for d in days}
 
         for _, r in df_plan.iterrows():
-            d = int(r["scheduled_day_d"])
+            d = r.get("scheduled_day_d", None)
+            if d is None or pd.isna(d):
+                continue
+            d = int(d)
+
             i = r["asset_i"]
             f = r["failure_f"]
 
             if asset_fail_count.get(i, 0) <= 1:
-                only_f[f][d] += 1
+                # protect against missing day keys (if horizon mismatch)
+                if d in only_f.get(f, {}):
+                    only_f[f][d] += 1
             else:
-                multi_assets_per_day[d].add(i)
+                if d in multi_assets_per_day:
+                    multi_assets_per_day[d].add(i)
 
         multi = {d: len(multi_assets_per_day[d]) for d in days}
 
-        # Optimized stacked bars
+        # Optimized stacked bars (colored by failure type)
         for f in failure_types:
-            fig.add_bar(x=days, y=[only_f[f][d] for d in days], name=f"Optimized: only {f}")
+            fig.add_bar(
+                x=days,
+                y=[only_f[f][d] for d in days],
+                name=f"Optimized: only {f}",
+                marker=dict(color=fault_colors.get(f)),  # if None, plotly auto-colors
+            )
 
-        fig.add_bar(x=days, y=[multi[d] for d in days], name="Optimized: >1 failure")
+        # multi-failure bar (custom color)
+        fig.add_bar(
+            x=days,
+            y=[multi[d] for d in days],
+            name="Optimized: >1 failure",
+            marker=dict(color=multi_fault_color),
+        )
 
         # Baseline overlay line (total planned jobs/day)
         if baseline_counts is not None:
@@ -1030,6 +1574,8 @@ def register_callbacks(app):
                 y=[baseline_counts.get(int(d), 0) for d in days],
                 mode="lines+markers",
                 name="Baseline planned jobs (pre-optimizer)",
+                line=dict(color=baseline_color),
+                marker=dict(color=baseline_color),
             )
 
         fig.update_layout(
@@ -1040,7 +1586,7 @@ def register_callbacks(app):
             legend=dict(orientation="h"),
         )
         return fig
-    
+
     def _parse_start_date(x):
         """Accept None/date/ISO string and return a date or None."""
         if x is None or x == "":
@@ -1050,136 +1596,6 @@ def register_callbacks(app):
         if isinstance(x, str):
             return date.fromisoformat(x)  # expects "YYYY-MM-DD"
         return None
-
-    def _shift_to_workday(d_int: int, workday: dict, horizon: int) -> int:
-        """If day is not workday, move forward to next workday; if none, move backward."""
-        d = int(d_int)
-        d = max(1, min(horizon, d))
-
-        # forward search
-        dd = d
-        while dd <= horizon and int(workday.get(dd, 1)) == 0:
-            dd += 1
-        if dd <= horizon:
-            return dd
-
-        # fallback: backward search
-        dd = d
-        while dd >= 1 and int(workday.get(dd, 1)) == 0:
-            dd -= 1
-        return max(1, dd)
-
-    def _build_baseline_plan(data: dict) -> pd.DataFrame:
-        """
-        Baseline (pre-optimizer) plan:
-        planned_day = max(RUL_if - LT_i, 0), then mapped to day index [1..horizon]
-        and shifted to a workday.
-        """
-        horizon = len(data["D"])
-        rows = []
-        for (i, f), fif in data["F_if"].items():
-            if int(fif) != 1:
-                continue
-
-            rul = int(data["RUL"][(i, f)])
-            lt = int(data["LT"][i])
-
-            planned_time = max(rul - lt, 0)
-
-            planned_day = max(1, min(int(planned_time), horizon))
-            planned_day = _shift_to_workday(planned_day, data["workday"], horizon)
-
-            # NEW: execution duration (workdays)
-            tau_exec = int(data["tau_exec"][(i, f)])
-
-            rows.append(
-                {
-                    "asset_i": i,
-                    "failure_f": f,
-                    "planned_time": int(planned_time),
-                    "planned_day_d": int(planned_day),
-                    "tau_exec": int(tau_exec),          # <-- NEW
-                    "RUL_if": rul,
-                    "LT_i": lt,
-                }
-            )
-
-        df_base = pd.DataFrame(rows)
-        if df_base.empty:
-            return df_base
-
-        return df_base.sort_values(["planned_day_d", "asset_i", "failure_f"], ignore_index=True)
-
-    def _baseline_counts_by_day(data: dict, df_base: pd.DataFrame) -> dict[int, int]:
-        days = list(map(int, data["D"]))
-        counts = {d: 0 for d in days}
-        if df_base is None or df_base.empty:
-            return counts
-        for d, g in df_base.groupby("planned_day_d"):
-            counts[int(d)] = int(len(g))
-        return counts
-
-    def _baseline_costs(data: dict, df_base: pd.DataFrame) -> dict:
-        """Estimate setup + penalty + mode costs for baseline plan (no solver)."""
-        if df_base is None or df_base.empty:
-            return {
-                "setup_cost": 0.0,
-                "phi_penalty_cost": 0.0,
-                "psi_penalty_cost": 0.0,
-                "penalty_cost": 0.0,
-                "regular_mode_cost": 0.0,
-                "emergency_mode_cost": 0.0,
-                "reactive_mode_cost": 0.0,
-                "mode_cost": 0.0,
-                "total_cost": 0.0,
-            }
-
-        # Setup cost: charge once per asset that has any baseline event
-        assets_with_any = set(df_base["asset_i"].tolist())
-        setup_cost = float(sum(float(data["c_setup"][i]) for i in assets_with_any))
-
-        phi_pen = 0.0
-        psi_pen = 0.0
-        reg_cost = 0.0
-        react_cost = 0.0
-        emer_cost = 0.0  # baseline rule won’t use emergency unless you decide to
-
-        for _, r in df_base.iterrows():
-            i = r["asset_i"]
-            f = r["failure_f"]
-            d0 = int(r["planned_day_d"])
-            rul = int(r["RUL_if"])
-            lt = int(r["LT_i"])
-
-            phi = max(d0 - rul, 0)
-            psi = max((rul - lt) - d0, 0)
-
-            phi_pen += float(data["alpha"][(i, f)]) * float(phi)
-            psi_pen += float(data["beta"][(i, f)]) * float(psi)
-
-            # Baseline mode rule:
-            # tardy => reactive, else regular predictive
-            if phi > 0:
-                react_cost += float(data["c_re"][(i, f)])
-            else:
-                reg_cost += float(data["c_pr"][(i, f)])
-
-        penalty_cost = phi_pen + psi_pen
-        mode_cost = reg_cost + react_cost + emer_cost
-        total_cost = setup_cost + penalty_cost + mode_cost
-
-        return {
-            "setup_cost": setup_cost,
-            "phi_penalty_cost": phi_pen,
-            "psi_penalty_cost": psi_pen,
-            "penalty_cost": penalty_cost,
-            "regular_mode_cost": reg_cost,
-            "emergency_mode_cost": emer_cost,
-            "reactive_mode_cost": react_cost,
-            "mode_cost": mode_cost,
-            "total_cost": total_cost,
-        }
-
 
     def _check_capacity_infeasible(
         df_base: pd.DataFrame,
@@ -1283,6 +1699,7 @@ def register_callbacks(app):
         Output("mp-obj", "children"),
         Output("mp-cashflow-graph", "figure"),
         Output("mp-stack-graph", "figure"),
+        Output("mp-gantt-graph", "figure"),
         Output("mp-calendar", "events"),
         Output("mp-kpi-assets", "children"),
         Output("mp-kpi-assets-fail", "children"),
@@ -1311,7 +1728,7 @@ def register_callbacks(app):
 
             # --- build data FIRST (always) ---
             data = _base_data(
-                n_assets=int(shared_inputs.get("n_assets", 10)),
+                n_assets=int(shared_inputs.get("n_assets", 100)),
                 horizon=int(shared_inputs.get("horizon", 31)),
                 failure_types=shared_inputs.get("failure_types", ["motor", "battery"]),
                 p_fail=float(shared_inputs.get("p_fail", 0.5)),
@@ -1324,6 +1741,7 @@ def register_callbacks(app):
                 tau_s_range=tuple(shared_inputs.get("tau_s_range", (1, 3))),
                 tau_exec_range=tuple(shared_inputs.get("tau_exec_range", (1, 5))),
             )
+            fault_colors, setup_color, exec_color, multi_fault_color = build_color_config(data, DEFAULT_PALETTE)
 
 
             # override R if user changed it
@@ -1335,61 +1753,133 @@ def register_callbacks(app):
                 data["workday"] = {d: 1 for d in data["D"]}
 
             # --- Baseline plan (always) ---
-            df_base = _build_baseline_plan(data)
-            base_counts = _baseline_counts_by_day(data, df_base)
+            obj_base, df_plan_base, df_setup_base, summary_base = build_base_plan(data)
+
+            # ---- baseline counts by day (use execution STARTS) ----
+            days = list(map(int, data["D"]))
+            base_counts = {d: 0 for d in days}
+            if df_plan_base is not None and not df_plan_base.empty:
+                for d, g in df_plan_base.groupby("scheduled_day_d"):
+                    if pd.isna(d):
+                        continue
+                    base_counts[int(d)] = int(len(g))
+
+            # ---- capacity check (optional): build a df_base-like table from baseline plan ----
+            # _check_capacity_infeasible expects:
+            #   start_col planned_day_d and a tau_exec column
+            df_base_like = pd.DataFrame()
+            if df_plan_base is not None and not df_plan_base.empty:
+                df_base_like = df_plan_base.copy()
+                df_base_like["planned_day_d"] = df_base_like["scheduled_day_d"]
+
+                # attach tau_exec per (i,f)
+                def _tau_exec_lookup(row):
+                    i = row["asset_i"]
+                    f = row["failure_f"]
+                    return int(data["tau_exec"].get((i, f), 1))  # safe fallback for check only
+
+                df_base_like["tau_exec"] = df_base_like.apply(_tau_exec_lookup, axis=1)
+
             is_infeasible, cap_info = _check_capacity_infeasible(
-                df_base=df_base,
+                df_base=df_base_like,
                 R=int(data["R"]),
                 workday=data["workday"],
                 horizon=len(data["D"]),
                 tau_exec_col="tau_exec",
                 start_col="planned_day_d",
             )
-            # baseline calendar events
+
             events = []
             horizon = len(data["D"])
 
-            if df_base is not None and not df_base.empty:
-                for _, r in df_base.iterrows():
-                    d0 = int(r["planned_day_d"])
-                    tau = int(r["tau_exec"])
+            # (A) baseline EXEC events
+            if df_plan_base is not None and not df_plan_base.empty:
+                for _, r in df_plan_base.iterrows():
+                    d0 = r.get("scheduled_day_d", None)
+                    if d0 is None or (isinstance(d0, float) and pd.isna(d0)):
+                        continue
+
+                    d0 = int(d0)
+                    i = r["asset_i"]
+                    f = r["failure_f"]
+                    tau = int(data["tau_exec"].get((i, f), 1))
 
                     start_dt = data["start_date"] + timedelta(days=d0 - 1)
                     end_day = _end_day_after_tau_workdays(d0, tau, data["workday"], horizon)
-                    end_dt = data["start_date"] + timedelta(days=end_day - 1)  # because end_day is a day index
+                    end_dt = data["start_date"] + timedelta(days=end_day - 1)
+
+                    # choose exec color (per-fault, fallback to exec_color)
+                    exec_bg = fault_colors.get(f, exec_color)
 
                     events.append({
-                        "title": f"Baseline · {r['asset_i']} · {r['failure_f']} (planned={r['planned_time']})",
+                        "title": f"Baseline · {i} · {f} ({r.get('mode','')})",
                         "start": start_dt.isoformat(),
-                        "end": end_dt.isoformat(),     # <-- NEW
+                        "end": end_dt.isoformat(),
                         "allDay": True,
                         "display": "auto",
+                        "backgroundColor": exec_bg,
+                        "borderColor": exec_bg,
+                        "textColor": "#0e0d0d",
                     })
 
-            # KPIs that can be shown even before optimization
+            # (B) baseline SETUP events
+            if df_setup_base is not None and not df_setup_base.empty:
+                for _, r in df_setup_base.iterrows():
+                    d0 = r.get("setup_day_d", None)
+                    if d0 is None or (isinstance(d0, float) and pd.isna(d0)):
+                        continue
+
+                    d0 = int(d0)
+                    i = r["asset_i"]
+                    tau = int(data["tau_s"].get(i, 1))
+
+                    start_dt = data["start_date"] + timedelta(days=d0 - 1)
+                    end_day = _end_day_after_tau_workdays(d0, tau, data["workday"], horizon)
+                    end_dt = data["start_date"] + timedelta(days=end_day - 1)
+
+                    events.append({
+                        "title": f"Baseline · {i} · Setup",
+                        "start": start_dt.isoformat(),
+                        "end": end_dt.isoformat(),
+                        "allDay": True,
+                        "display": "auto",
+                        "backgroundColor": setup_color,
+                        "borderColor": setup_color,
+                        "textColor": "#ffffff",
+                    })
+            # ---- KPIs that can be shown even before optimization ----
             n_assets = len(data["I"])
             assets_with_fail = sum(
                 1 for i in data["I"]
                 if any(data["F_if"][(i, f)] == 1 for f in data["F"])
             )
             total_failures = sum(data["F_if"][(i, f)] for i in data["I"] for f in data["F"])
-            
-            # By default (baseline-only), keep costs as "-"
-            baseline_summary = _baseline_costs(data, df_base)
 
-            kpi_setup = _fmt_money(baseline_summary["setup_cost"])
-            kpi_penalty = _fmt_money(baseline_summary["penalty_cost"])
-            kpi_mode = _fmt_money(baseline_summary["mode_cost"])
-            kpi_total = _fmt_money(baseline_summary["total_cost"])
-            kpi_status = (html.Span("Infeasible", style={"color": "#b00020", "fontWeight": 700})
+            # Baseline KPIs now come straight from summary_base (already includes setup + penalties + mode)
+            kpi_setup = _fmt_money(summary_base.get("setup_cost", 0.0))
+            kpi_penalty = _fmt_money(summary_base.get("penalty_cost", 0.0))
+            kpi_mode = _fmt_money(summary_base.get("mode_cost", 0.0))
+            kpi_total = _fmt_money(summary_base.get("total_cost", obj_base))
+
+            kpi_status = (
+                html.Span("Infeasible", style={"color": "#b00020", "fontWeight": 700})
                 if is_infeasible
                 else html.Span("Feasible", style={"color": "#1bb31b", "fontWeight": 700})
             )
-            # baseline graphs: no optimized plan yet
-            empty_plan = pd.DataFrame()
-            empty_setup = pd.DataFrame()
-            fig_cash = _build_cashflow_figure(data, empty_plan, empty_setup, baseline_counts=base_counts)
-            fig_stack = _build_stacked_fleets_figure(data, empty_plan, baseline_counts=base_counts)
+
+            # ---- baseline graphs: now show BASELINE plan (not empty) ----
+            # cashflow uses df_plan + df_setup (and spreads across durations)
+            fig_cash = _build_cashflow_figure(data, df_plan_base, df_setup_base, baseline_counts=base_counts, 
+                                              exec_color=exec_color, baseline_color=multi_fault_color )
+
+            # stack graph uses df_plan start days (bars) + optional baseline overlay (line)
+            # if you want the overlay line to represent baseline starts as well, pass baseline_counts=None
+            fig_stack = _build_stacked_fleets_figure(data, df_plan_base, baseline_counts=base_counts, 
+                                                     fault_colors=fault_colors, multi_fault_color=multi_fault_color, baseline_color=multi_fault_color)
+
+            # gantt: show baseline schedule too (setup+exec)
+            fig_gantt = _build_gantt_figure(data, df_plan_base, df_setup_base, 
+                                            setup_color=setup_color, exec_color=exec_color,)
 
             # Determine what triggered the callback
             trig = dash.callback_context.triggered[0]["prop_id"].split(".")[0] if dash.callback_context.triggered else ""
@@ -1405,22 +1895,24 @@ def register_callbacks(app):
                             html.Span(
                                 f"Capacity R = {int(data['R'])} concurrent executions, "
                                 f"but day {worst_day} has {worst_cnt} ongoing executions. "
-                                ),
+                            ),
                         ],
                         style={"color": "#b00020"},
                     )
                 else:
                     status = html.Div(
                         [
-                            html.Span("Initial plan generated (baseline cost estimate). "),
+                            html.Span("Initial plan generated (baseline). "),
                             html.Span("Click Run Optimization to solve."),
                         ]
                     )
+
                 return (
                     status,
-                    "Objective value: - (baseline only)",
+                    f"Objective value: {float(obj_base):,.4f} (baseline)",
                     fig_cash,
                     fig_stack,
+                    fig_gantt,
                     events,
                     str(n_assets),
                     str(assets_with_fail),
@@ -1429,11 +1921,10 @@ def register_callbacks(app):
                     kpi_penalty,
                     kpi_mode,
                     kpi_total,
-                    kpi_status, 
-                    baseline_summary,
-                    "",#  no links until optimization
+                    kpi_status,
+                    summary_base,   # store baseline summary
+                    "",             # no links until optimization
                 )
-
             # --- If triggered by Run button: solve optimizer and overlay results ---
             obj, df_plan, df_setup, summary = solve_instance(data, solver_name=solver_name)
 
@@ -1444,12 +1935,18 @@ def register_callbacks(app):
             kpi_total = _fmt_money(summary.get("total_cost", obj))
 
             # figures with optimized + baseline overlay
-            fig_cash = _build_cashflow_figure(data, df_plan, df_setup, baseline_counts=base_counts)
-            fig_stack = _build_stacked_fleets_figure(data, df_plan, baseline_counts=base_counts)
+            fig_cash = _build_cashflow_figure(data, df_plan, df_setup, baseline_counts=base_counts, 
+                                              exec_color=exec_color,    baseline_color=multi_fault_color)
+            fig_stack = _build_stacked_fleets_figure(data, df_plan, baseline_counts=base_counts, 
+                                                     fault_colors=fault_colors, multi_fault_color=multi_fault_color, baseline_color=multi_fault_color)
+            fig_gantt = _build_gantt_figure(data, df_plan, df_setup, 
+                                            setup_color=setup_color, exec_color=exec_color,)
 
             # append optimized events
             # append optimized events (execution spans tau_exec WORKDAYS)
             horizon = len(data["D"])
+            events = []
+
             if df_plan is not None and not df_plan.empty:
                 for _, r in df_plan.iterrows():
                     d0 = r.get("scheduled_day_d", None)
@@ -1459,18 +1956,57 @@ def register_callbacks(app):
                     d0 = int(d0)
                     i = r["asset_i"]
                     f = r["failure_f"]
-                    tau = int(data["tau_exec"][(i, f)])
+                    tau = int(data["tau_exec"].get((i, f), 1))
+
+                    start_dt = data["start_date"] + timedelta(days=d0 - 1)
+                    end_day = _end_day_after_tau_workdays(d0, tau, data["workday"], horizon)
+                    end_dt = data["start_date"] + timedelta(days=end_day - 1)
+
+                    exec_bg = fault_colors.get(f, exec_color)
+
+                    events.append({
+                        "title": f"Optimized · {i} · {f} ({r.get('mode','')})",
+                        "start": start_dt.isoformat(),
+                        "end": end_dt.isoformat(),
+                        "allDay": True,
+                        "display": "auto",
+
+                        # colors
+                        "backgroundColor": exec_bg,
+                        "borderColor": exec_bg,
+                        "textColor": "#ffffff",
+
+                        # optional: make optimized visually “stronger”
+                        # (FullCalendar supports this via extendedProps + eventDidMount if you want,
+                        # but many wrappers also pass this through directly)
+                        # "classNames": ["optimized-event"],
+                    })
+
+            if df_setup is not None and not df_setup.empty:
+                for _, r in df_setup.iterrows():
+                    d0 = r.get("setup_day_d", None)
+                    if d0 is None or (isinstance(d0, float) and pd.isna(d0)):
+                        continue
+
+                    d0 = int(d0)
+                    i = r["asset_i"]
+                    tau = int(data["tau_s"].get(i, 1))
 
                     start_dt = data["start_date"] + timedelta(days=d0 - 1)
                     end_day = _end_day_after_tau_workdays(d0, tau, data["workday"], horizon)
                     end_dt = data["start_date"] + timedelta(days=end_day - 1)
 
                     events.append({
-                        "title": f"Optimized · {i} · {f} ({r['mode']})",
+                        "title": f"Optimized · {i} · Setup",
                         "start": start_dt.isoformat(),
-                        "end": end_dt.isoformat(),     # <-- NEW
+                        "end": end_dt.isoformat(),
                         "allDay": True,
                         "display": "auto",
+
+                        # setup color
+                        "backgroundColor": setup_color,
+                        "borderColor": setup_color,
+                        "textColor": "#ffffff",
                     })
 
             links = html.Div(
@@ -1493,6 +2029,7 @@ def register_callbacks(app):
                 f"Objective value: {float(obj):,.4f}",
                 fig_cash,
                 fig_stack,
+                fig_gantt,
                 events,
                 str(n_assets),
                 str(assets_with_fail),
@@ -1520,6 +2057,7 @@ def register_callbacks(app):
             return (
                 status,
                 "Objective value: -",
+                empty_fig,
                 empty_fig,
                 empty_fig,
                 [],
