@@ -28,6 +28,7 @@ external_stylesheets = [
 app = Dash(
     __name__,
     suppress_callback_exceptions=True,
+    use_pages=True,
     external_stylesheets=external_stylesheets,
     assets_folder="assets",
 )
@@ -232,7 +233,7 @@ cost_function.register_callbacks(app)
 data_simulator.register_callbacks(app)
 rul_distribution.register_callbacks(app)
 cost_sensitive_model.register_callbacks(app)
-maintenance_planning.register_callbacks(app)  # ✅ NEW
+maintenance_planning.register_callbacks(app)  
 benchmark.register_callbacks(app)
 
 # Set validation layout for Dash
@@ -244,7 +245,7 @@ app.validation_layout = html.Div(
         data_simulator.layout(),
         rul_distribution.layout(),
         cost_sensitive_model.layout(),
-        maintenance_planning.layout(),  # ✅ NEW
+        maintenance_planning.layout(), 
         benchmark.layout(),
     ]
 )

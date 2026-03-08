@@ -11,7 +11,6 @@ import numpy as np
 import uuid
 import traceback
 
-
 from dash import dcc, html, ctx, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
@@ -21,8 +20,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from core.metrics import compute_all, metric_labels
+from core.metrics import compute_all
 from pages.cost_function import nonlinear_cost
+from pages.train_wizard import build_training_wizard, register_training_wizard_callbacks
 
 
 # -----------------------------
@@ -90,6 +90,7 @@ pill_value_style = {
     "borderRight": "1px solid #d1d5db",
 }
 
+
 def param_three_zone_pill(label: str, value_id: str, dec_id: str, inc_id: str, initial_value: int):
     return html.Div(
         [
@@ -115,8 +116,8 @@ dropdown_style_hidden = {
     "zIndex": "9999",
     "border": "1px solid #ddd",
     "backgroundColor": "white",
-    "width": "380px",          # ✅ fixed width
-    "boxSizing": "border-box", # ✅ include padding in width
+    "width": "380px",
+    "boxSizing": "border-box",
     "padding": "15px",
     "borderRadius": "8px",
     "boxShadow": "0 4px 12px rgba(0,0,0,0.15)",
@@ -160,6 +161,7 @@ MODEL_RE = re.compile(
     r"CP(?P<cost_predictive>\d+)\.pkl$"
 )
 
+
 def _parse_model_name(filename: str) -> dict | None:
     m = MODEL_RE.match(filename)
     if not m:
@@ -185,6 +187,7 @@ SETTING_LABELS = {
     "cost_predictive": "Predictive cost",
 }
 
+
 def format_settings_for_display(s: dict) -> str:
     lines = []
     for k in ["slice_window", "early_penalty", "late_penalty", "cost_reactive", "cost_predictive"]:
@@ -200,6 +203,7 @@ def _pct_close(a: float, b: float) -> float:
     pct_diff = abs(a - b) / denom
     return max(0.0, 1.0 - pct_diff)
 
+
 def similarity_percent(target: dict, candidate: dict) -> float:
     weights = {
         "slice_window": 3.0,
@@ -214,6 +218,7 @@ def similarity_percent(target: dict, candidate: dict) -> float:
         num += w * _pct_close(float(target[k]), float(candidate[k]))
         den += w
     return num / den if den else 0.0
+
 
 def top_k_models(target: dict, model_dir: str = MODELS_DIR, k: int = 3) -> list[dict]:
     assets_path = Path(model_dir)
@@ -233,15 +238,16 @@ def top_k_models(target: dict, model_dir: str = MODELS_DIR, k: int = 3) -> list[
 # -----------------------------
 _MODEL_CACHE: dict[str, object] = {}
 
+
 def load_model(model_path: str):
     """
     TEMP: model loading disabled. Returns None always.
-    (kept for the pipeline UI: select -> load -> metrics -> graphs)
     """
     if model_path in _MODEL_CACHE:
         return _MODEL_CACHE[model_path]
     model = None
     return model
+
 
 def train_new_model(target_settings: dict, save_to: str):
     """
@@ -250,17 +256,13 @@ def train_new_model(target_settings: dict, save_to: str):
     """
     return {"trained_for_pretty": format_settings_for_display(target_settings), "saved_to": save_to}
 
+
 def predict_rul_from_validation_csv(model, validation_csv_path: str):
-    """
-    DEMO:
-    - rul_true comes from column 'rul'
-    - rul_pred is randomly generated with the same length
-    """
     p = Path(validation_csv_path)
     if not p.exists():
         raise FileNotFoundError(f"validation.csv not found at: {validation_csv_path}")
 
-    df = pd.read_csv(p, sep = ";", decimal= ",")
+    df = pd.read_csv(p, sep=";", decimal=",")
 
     if "rul" not in df.columns:
         raise ValueError(
@@ -271,27 +273,21 @@ def predict_rul_from_validation_csv(model, validation_csv_path: str):
     y_true = df["rul"].to_numpy(dtype=float).reshape(-1)
     y_pred = df["y_pred"].to_numpy(dtype=float).reshape(-1)
 
-
     return y_true, y_pred
 
 
 def make_cost_fn_from_settings(s: dict, *, leadtime: float):
-    """
-    Returns a function cost_fn(yt, yp) -> float for compute_all.
-    Uses the page settings 's' to fill nonlinear_cost params.
-    """
-    C_PR = float(s["cost_predictive"])   # predictive cost (early)
-    C_RE = float(s["cost_reactive"])     # reactive cost (late)
+    C_PR = float(s["cost_predictive"])
+    C_RE = float(s["cost_reactive"])
     ALPHA = float(s["early_penalty"])
-    BETA  = float(s["late_penalty"])
+    BETA = float(s["late_penalty"])
 
     def cost_fn(yt: np.ndarray, yp: np.ndarray) -> float:
-        yt = np.asarray(yt, dtype=float).reshape(-1)  # true
-        yp = np.asarray(yp, dtype=float).reshape(-1)  # pred
+        yt = np.asarray(yt, dtype=float).reshape(-1)
+        yp = np.asarray(yp, dtype=float).reshape(-1)
         if yt.size != yp.size:
             raise ValueError("y_true and y_pred must have the same length")
 
-        # per-sample costs, then average
         costs = []
         for t, p in zip(yt, yp):
             costs.append(nonlinear_cost(p, t, leadtime, C_PR, ALPHA, C_RE, BETA))
@@ -299,15 +295,14 @@ def make_cost_fn_from_settings(s: dict, *, leadtime: float):
 
     return cost_fn
 
+
 # -----------------------------
 # UI rendering helpers
 # -----------------------------
-
 def render_metrics_section(metrics: dict | None):
     if not metrics:
         return html.Div("No metrics available (no y_true/y_pred yet).", style={"opacity": 0.7})
 
-    # helpers
     def fmt_num(v):
         if v is None:
             return "—"
@@ -325,22 +320,17 @@ def render_metrics_section(metrics: dict | None):
         v = metrics.get(key)
         return None if v is None else float(v)
 
-    # core numbers
     mse = metrics.get("mse")
     cost = metrics.get("cost")
 
-    overall_acc = get_pct("error_within_0_min_pct")
-    overall_cons = get_pct("error_within_0_min_pct_neg")
-    overall_other = None if (overall_acc is None or overall_cons is None) else max(0.0, overall_acc - overall_cons)
+    overall_acc = get_pct("accuracy")
+    overall_cons = get_pct("conservative_pct")
+    crit_acc = get_pct("critical_accuracy")
+    crit_cons = get_pct("critical_conservative_pct")
 
-    crit_acc = get_pct("error_within_0_min_pct_critical")
-
-    # thresholds (optional small caption)
-    min_err = float(metrics.get("min_err", 2.0))
-    max_err = float(metrics.get("max_err", 14.0))
+    epsilon = float(metrics.get("epsilon", 2.0))
     crit_lt = float(metrics.get("critical_true_lt", 10.0))
 
-    # styles
     grid_style = {
         "display": "grid",
         "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
@@ -369,23 +359,22 @@ def render_metrics_section(metrics: dict | None):
     return html.Div(
         [
             html.Div(
-                f"Thresholds: ε1={min_err:g}, ε2={max_err:g} | Critical subset: true RUL < {crit_lt:g}",
+                f"Accuracy tolerance: ε={epsilon:g} | Critical subset: true RUL < {crit_lt:g}",
                 style={"fontSize": "12px", "opacity": 0.7, "marginBottom": "10px"},
             ),
-
             html.Div(
                 [
-                    card("MSE (days²)", fmt_num(mse)),
+                    card("MSE", fmt_num(mse)),
                     card("Mean cost", fmt_num(cost)),
                     card(
-                        f"Overall accuracy (|err| ≤ {min_err})",
+                        f"Accuracy (|pred - true| ≤ {epsilon:g})",
                         fmt_pct(overall_acc),
-                        sub=f"Conservative (err ≤ 0): {fmt_pct(overall_cons)}",
+                        sub=f"Conservative (pred - true ≤ 0): {fmt_pct(overall_cons)}",
                     ),
                     card(
-                        "Critical accuracy",
+                        f"Critical accuracy (true < {crit_lt:g})",
                         fmt_pct(crit_acc),
-                        sub=f"Accuracy on high-risk cases (true < {min_err})",
+                        sub=f"Critical conservative: {fmt_pct(crit_cons)}",
                     ),
                 ],
                 style=grid_style,
@@ -404,14 +393,11 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
     yp = np.asarray(y_pred, dtype=float).reshape(-1)
     err = yp - yt
 
-    # -------------------------
-    # 1) Pred vs True (binned mean, LINE ONLY)
-    # -------------------------
-    bins = 25  # tweak as needed
+    bins = 25
     yt_min = float(np.nanmin(yt))
     yt_max = float(np.nanmax(yt))
     edges = np.linspace(yt_min, yt_max, bins + 1)
-    bin_ids = np.digitize(yt, edges) - 1  # 0..bins-1
+    bin_ids = np.digitize(yt, edges) - 1
 
     x_centers = (edges[:-1] + edges[1:]) / 2.0
     mean_pred = np.full(bins, np.nan)
@@ -430,12 +416,11 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
         go.Scatter(
             x=x_plot,
             y=y_plot,
-            mode="lines",           # ✅ line only (no markers)
+            mode="lines",
             name="Mean(pred) per true-bin",
         )
     )
 
-    # y=x reference line
     mn = float(np.nanmin(x_plot)) if x_plot.size else yt_min
     mx = float(np.nanmax(x_plot)) if x_plot.size else yt_max
     fig_scatter.add_trace(go.Scatter(x=[mn, mx], y=[mn, mx], mode="lines", name="y=x"))
@@ -447,9 +432,7 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
         height=340,
         margin=dict(l=40, r=20, t=50, b=40),
     )
-    # -------------------------
-    # 2) Error distribution
-    # -------------------------
+
     fig_hist = go.Figure()
     fig_hist.add_trace(go.Histogram(x=err, name="Error (pred-true)"))
     fig_hist.update_layout(
@@ -460,18 +443,7 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
         margin=dict(l=40, r=20, t=50, b=40),
     )
 
-    # -------------------------
-    # 3) Error vs True RUL (binned mean, LINE ONLY — like graph 1)
-    # -------------------------
-    bins = 25  # keep same as graph 1 for consistency
-    yt_min = float(np.nanmin(yt))
-    yt_max = float(np.nanmax(yt))
-    edges = np.linspace(yt_min, yt_max, bins + 1)
-    bin_ids = np.digitize(yt, edges) - 1  # 0..bins-1
-
-    x_centers = (edges[:-1] + edges[1:]) / 2.0
     mean_err = np.full(bins, np.nan)
-
     for b in range(bins):
         m = bin_ids == b
         if np.any(m):
@@ -486,7 +458,7 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
         go.Scatter(
             x=x_plot,
             y=y_plot,
-            mode="lines",  # ✅ no markers
+            mode="lines",
             name="Mean(err) per true-bin",
         )
     )
@@ -499,60 +471,38 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
         margin=dict(l=40, r=20, t=50, b=40),
     )
 
-    # -------------------------
-    # -------------------------
-    # 4) Cost curve for ONE record (random pick) — COST ONLY
-    #    + colored vertical lines with legend on the right
-    # -------------------------
-    yt = np.asarray(y_true, dtype=float).reshape(-1)
-    yp = np.asarray(y_pred, dtype=float).reshape(-1)
-
-    diff = yt - yp  # positive => pred < true
+    diff = yt - yp
     good_idx = np.where((diff > 0) & (diff < 10))[0]
 
     if good_idx.size > 0:
         i = int(np.random.choice(good_idx))
     else:
-        # fallback: pick the closest under-pred record (diff > 0 with minimal diff)
         under_idx = np.where(diff > 0)[0]
         if under_idx.size > 0:
             i = int(under_idx[np.argmin(diff[under_idx])])
         else:
-            # last fallback: truly random
             i = int(np.random.randint(0, yt.size))
 
     t_i = float(yt[i])
     p_i = float(yp[i])
-    # cost params from settings
+
     C_PR = float(s["cost_predictive"])
     C_RE = float(s["cost_reactive"])
     ALPHA = float(s["early_penalty"])
     BETA = float(s["late_penalty"])
 
-    # x-grid for predicted RUL in the cost curve
     x_max = float(max(200.0, np.nanmax(yt), np.nanmax(yp), thresh * 2))
     x_grid = np.linspace(0.0, x_max, 600)
 
-    # per-record cost curve
     costs = np.array([nonlinear_cost(p, t_i, leadtime, C_PR, ALPHA, C_RE, BETA) for p in x_grid], dtype=float)
-
-    # a "random prediction" baseline point (uniform over range)
-    rand_p = float(np.random.uniform(0.0, x_max))
-    rand_cost = float(nonlinear_cost(rand_p, t_i, leadtime, C_PR, ALPHA, C_RE, BETA))
     pred_cost = float(nonlinear_cost(p_i, t_i, leadtime, C_PR, ALPHA, C_RE, BETA))
 
     y_min = float(np.nanmin(costs))
     y_max = float(np.nanmax(costs))
 
     fig_cost = go.Figure()
-
-    # cost curve
     fig_cost.add_trace(go.Scatter(x=x_grid, y=costs, mode="lines", name="Cost"))
-
-    # markers for selected pred + random pred
     fig_cost.add_trace(go.Scatter(x=[p_i], y=[pred_cost], mode="markers", name=f"Pred cost = {pred_cost:.1f}"))
-
-    # --- vertical lines as traces so they appear in legend ---
     fig_cost.add_trace(
         go.Scatter(
             x=[p_i, p_i],
@@ -573,30 +523,18 @@ def render_graphs_section(y_true, y_pred, *, s: dict, leadtime: float, thresh: f
             hoverinfo="skip",
         )
     )
-
     fig_cost.update_layout(
         title=f"Cost curve (True value ={t_i:.1f}, Prediciton ={p_i:.1f})",
         xaxis_title="Predicted RUL",
         yaxis_title="Cost",
         height=340,
-        margin=dict(l=40, r=160, t=50, b=40),  # extra right margin for legend
-        legend=dict(
-            orientation="v",
-            x=1.02,
-            xanchor="left",
-            y=1.0,
-            yanchor="top",
-        ),
+        margin=dict(l=40, r=160, t=50, b=40),
+        legend=dict(orientation="v", x=1.02, xanchor="left", y=1.0, yanchor="top"),
     )
 
-    # -------------------------
-    # Responsive 2x2 grid
-    # - wide: 2 columns
-    # - tiny: 1 column
-    # -------------------------
     cell_style = {
-        "flex": "1 1 480px",      # grows; wraps if narrow
-        "minWidth": "320px",      # prevents too tiny
+        "flex": "1 1 480px",
+        "minWidth": "320px",
     }
     grid_style = {
         "display": "flex",
@@ -629,7 +567,6 @@ def build_main_page_layout():
                     style={"border": "1px dashed #bbb", "borderRadius": "10px", "padding": "16px"},
                 ),
             ),
-
             html.Div(
                 id="card-loading-training",
                 style=HIDDEN_STYLE,
@@ -638,7 +575,6 @@ def build_main_page_layout():
                     dcc.Loading(type="circle", children=html.Div(id="section-loading-training")),
                 ],
             ),
-
             html.Div(
                 id="card-metrics",
                 style=HIDDEN_STYLE,
@@ -647,7 +583,6 @@ def build_main_page_layout():
                     dcc.Loading(type="circle", children=html.Div(id="section-metrics")),
                 ],
             ),
-
             html.Div(
                 id="card-graphs",
                 style=HIDDEN_STYLE,
@@ -678,11 +613,11 @@ def layout():
         [
             dcc.Store(id="settings-store", data=settings),
             dcc.Store(id="selected-model-store", data={"model_name": None, "source": "none", "match_percent": None}),
-            
-            # inside layout() children list, near your existing stores:
-            dcc.Store(id="run-token", data=None),          # triggers a run
-            dcc.Store(id="pred-store", data=None),         # stores y_true/y_pred
-
+            dcc.Store(id="run-token", data=None),
+            dcc.Store(id="pred-store", data=None),
+            dcc.Store(id="train-wizard-open", data=False),
+            dcc.Store(id="train-wizard-step", data=1),
+            dcc.Store(id="train-wizard-form-store", data={}),
             html.Div(
                 [
                     html.I(className="fa fa-cogs", id="gear-icon", style={"fontSize": "30px", "cursor": "pointer", "color": "black"}),
@@ -692,14 +627,11 @@ def layout():
                             html.Div(
                                 [
                                     html.H3("Dataset Settings", style={"textAlign": "center"}),
-
                                     html.Div("Desired model:", style={"fontWeight": "bold"}),
                                     html.Div(id="desired-model-text", children=desired, style={"fontFamily": "monospace", "fontSize": "12px"}),
                                     html.Div(id="model-status-text", style={"marginTop": "8px", "fontSize": "13px"}),
-
                                     html.Label("Available / closest models:", style={"marginTop": "10px"}),
                                     dcc.Dropdown(id="model-dropdown", options=[], value=None, clearable=False, style={"fontSize": "12px"}),
-
                                     html.Div(
                                         [
                                             html.Button("Select model", id="btn-select-model", n_clicks=0),
@@ -707,12 +639,9 @@ def layout():
                                         ],
                                         style={"marginTop": "10px"},
                                     ),
-
                                     html.Div("Selected model:", style={"fontWeight": "bold", "marginTop": "10px"}),
                                     html.Div(id="selected-model-text", style={"fontSize": "12px", "fontFamily": "monospace"}),
-
                                     html.Hr(style={"margin": "14px 0"}),
-
                                     param_three_zone_pill("Slice length (days)", "slice_window_value", "slice_window_decrease", "slice_window_increase", settings["slice_window"]),
                                     param_three_zone_pill("Early penalty", "early_penalty_value", "early_penalty_decrease", "early_penalty_increase", settings["early_penalty"]),
                                     param_three_zone_pill("Late penalty", "late_penalty_value", "late_penalty_decrease", "late_penalty_increase", settings["late_penalty"]),
@@ -727,8 +656,8 @@ def layout():
                 ],
                 style={"position": "relative", "display": "flex", "justifyContent": "flex-end", "padding": "10px"},
             ),
-
             html.Div(id="main-click-catcher", n_clicks=0, children=[build_main_page_layout()]),
+            build_training_wizard(),
         ]
     )
 
@@ -737,7 +666,6 @@ def layout():
 # Callbacks
 # -------------------------------------------------
 def register_callbacks(app):
-    # toggle / auto-close settings panel
     @app.callback(
         Output("settings-panel", "style"),
         Input("gear-icon", "n_clicks"),
@@ -762,11 +690,16 @@ def register_callbacks(app):
         main_clicks,
         n_select,
         n_train,
-        w_dec, w_inc,
-        ep_dec, ep_inc,
-        lp_dec, lp_inc,
-        cr_dec, cr_inc,
-        cp_dec, cp_inc,
+        w_dec,
+        w_inc,
+        ep_dec,
+        ep_inc,
+        lp_dec,
+        lp_inc,
+        cr_dec,
+        cr_inc,
+        cp_dec,
+        cp_inc,
         current_style,
     ):
         def _open_style():
@@ -780,19 +713,14 @@ def register_callbacks(app):
         trig = ctx.triggered_id
         is_open_now = _is_open(current_style)
 
-        # Gear toggles open/close (same as old)
         if trig == "gear-icon":
             return dropdown_style_hidden if is_open_now else _open_style()
 
-        # If open, ONLY close on outside click or after select/train
         if is_open_now and trig in ("main-click-catcher", "btn-select-model", "btn-train-new"):
             return dropdown_style_hidden
 
-        # Otherwise keep it as-is (so +/- won't close it)
         return no_update
 
-
-    # update settings-store + visible values
     @app.callback(
         Output("settings-store", "data"),
         Output("slice_window_value", "children"),
@@ -814,11 +742,16 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def update_settings(
-        w_dec, w_inc,
-        ep_dec, ep_inc,
-        lp_dec, lp_inc,
-        cr_dec, cr_inc,
-        cp_dec, cp_inc,
+        w_dec,
+        w_inc,
+        ep_dec,
+        ep_inc,
+        lp_dec,
+        lp_inc,
+        cr_dec,
+        cr_inc,
+        cp_dec,
+        cp_inc,
         data,
     ):
         if not ctx.triggered_id:
@@ -831,22 +764,18 @@ def register_callbacks(app):
             s["slice_window"] = _clamp_int(s["slice_window"] - 1, 1, 10_000)
         elif trig == "slice_window_increase":
             s["slice_window"] = _clamp_int(s["slice_window"] + 1, 1, 10_000)
-
         elif trig == "early_penalty_decrease":
             s["early_penalty"] = _clamp_int(s["early_penalty"] - 1, 0, 10_000)
         elif trig == "early_penalty_increase":
             s["early_penalty"] = _clamp_int(s["early_penalty"] + 1, 0, 10_000)
-
         elif trig == "late_penalty_decrease":
             s["late_penalty"] = _clamp_int(s["late_penalty"] - 1, 0, 10_000)
         elif trig == "late_penalty_increase":
             s["late_penalty"] = _clamp_int(s["late_penalty"] + 1, 0, 10_000)
-
         elif trig == "cost_reactive_decrease":
             s["cost_reactive"] = _clamp_int(s["cost_reactive"] - 10, 0, 1_000_000)
         elif trig == "cost_reactive_increase":
             s["cost_reactive"] = _clamp_int(s["cost_reactive"] + 10, 0, 1_000_000)
-
         elif trig == "cost_predictive_decrease":
             s["cost_predictive"] = _clamp_int(s["cost_predictive"] - 1, 0, 1_000_000)
         elif trig == "cost_predictive_increase":
@@ -863,8 +792,6 @@ def register_callbacks(app):
             s["cost_predictive"],
         )
 
-
-    # Update desired model text + dropdown options + status message
     @app.callback(
         Output("desired-model-text", "children"),
         Output("model-status-text", "children"),
@@ -895,19 +822,11 @@ def register_callbacks(app):
             else:
                 status = html.Div("Exact model not found. Pick one of the closest models or train a new one.", style={"color": "#b00020"})
                 for row in top3:
-                    options.append({"label": f"{row['name']} ({row['score']*100:.1f}%)", "value": row["name"]})
+                    options.append({"label": f"{row['name']} ({row['score'] * 100:.1f}%)", "value": row["name"]})
                 default_value = top3[0]["name"]
 
         return desired, status, options, default_value
 
-
-    # =========================================================
-    # ONE callback for the whole pipeline:
-    # Select/Train -> Load (skipped) -> Metrics -> Graphs
-    #
-    # - Load step is shown but returns None for now.
-    # - Metrics/Graphs use validation.csv 'rul' and demo rul_pred.
-    # =========================================================
     @app.callback(
         Output("selected-model-store", "data"),
         Output("selected-model-text", "children"),
@@ -915,39 +834,40 @@ def register_callbacks(app):
         Output("card-metrics", "style"),
         Output("card-graphs", "style"),
         Output("main-placeholder", "style"),
-        Output("run-token", "data"),   # NEW: trigger downstream callbacks
+        Output("run-token", "data"),
         Input("btn-select-model", "n_clicks"),
-        Input("btn-train-new", "n_clicks"),
         State("settings-store", "data"),
         State("model-dropdown", "value"),
         prevent_initial_call=True,
     )
-    def start_run(n_select, n_train, s, dropdown_value):
+    def start_run(n_select, s, dropdown_value):
         if not s:
             raise PreventUpdate
 
         assets_path = Path(MODELS_DIR)
         desired = settings_slug(s)
-        desired_path = assets_path / desired
         trig = ctx.triggered_id
 
         if trig == "btn-select-model":
             if not dropdown_value:
                 raise PreventUpdate
+
             chosen_name = dropdown_value
             chosen_path = assets_path / chosen_name
+
             if not chosen_path.exists():
-                # show cards anyway; downstream sections will show error UI if needed
                 data = {"model_name": None, "source": "none", "match_percent": None}
                 return (
                     data,
                     "None selected",
-                    VISIBLE_CARD_STYLE, VISIBLE_CARD_STYLE, {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
+                    VISIBLE_CARD_STYLE,
+                    VISIBLE_CARD_STYLE,
+                    {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
                     {"display": "none"},
                     str(uuid.uuid4()),
                 )
 
-            if chosen_name == desired and desired_path.exists():
+            if chosen_name == desired:
                 data = {"model_name": chosen_name, "source": "exact", "match_percent": 100.0}
             else:
                 top3 = top_k_models(s, MODELS_DIR, k=3)
@@ -956,15 +876,9 @@ def register_callbacks(app):
 
             mp_text = "" if data["match_percent"] is None else f", {data['match_percent']:.1f}%"
             selected_text = f"{chosen_name} ({data['source']}{mp_text})"
-
-        elif trig == "btn-train-new":
-            train_new_model(s, save_to=str(desired_path))
-            data = {"model_name": desired, "source": "trained", "match_percent": 100.0}
-            selected_text = f"{desired} (trained, 100.0%)"
         else:
             raise PreventUpdate
 
-        # Make sections visible immediately; they will show spinners due to dcc.Loading
         return (
             data,
             selected_text,
@@ -972,7 +886,7 @@ def register_callbacks(app):
             VISIBLE_CARD_STYLE,
             {**VISIBLE_CARD_STYLE, "marginBottom": "0px"},
             {"display": "none"},
-            str(uuid.uuid4()),  # new token => triggers section callbacks
+            str(uuid.uuid4()),
         )
 
     @app.callback(
@@ -981,22 +895,23 @@ def register_callbacks(app):
         Input("run-token", "data"),
         State("settings-store", "data"),
         State("selected-model-store", "data"),
+        State("train-wizard-form-store", "data"),
         prevent_initial_call=True,
     )
-    def build_overview_and_preds(run_token, s, selected):
+    def build_overview_and_preds(run_token, s, selected, wizard_form_data):
         if not run_token or not s:
             raise PreventUpdate
 
         model_name = (selected or {}).get("model_name")
         source = (selected or {}).get("source")
         match_percent = (selected or {}).get("match_percent")
+        wizard_form_data = wizard_form_data or {}
 
-        # load model (still None in your demo)
         model_path = str(Path(MODELS_DIR) / model_name) if model_name else None
         model = load_model(model_path) if model_path else None
 
-        # heavy step: read csv + create y_true/y_pred
-        y_true, y_pred = predict_rul_from_validation_csv(model, VALIDATION_CSV)
+        eval_csv_path = wizard_form_data.get("data_path") or VALIDATION_CSV
+        y_true, y_pred = predict_rul_from_validation_csv(model, eval_csv_path)
 
         mp_text = "" if match_percent is None else f", {match_percent:.1f}%"
         overview_ui = html.Pre(
@@ -1004,6 +919,12 @@ def register_callbacks(app):
             f"Model: {model_name}\n"
             f"Source: {source}{mp_text}\n\n"
             f"Step 2: LOAD MODEL ⏭️ (skipped — loading disabled for demo)\n\n"
+            f"Wizard inputs:\n"
+            f"- Problem name: {wizard_form_data.get('problem_name', '—')}\n"
+            f"- Target name: {wizard_form_data.get('target_name', '—')}\n"
+            f"- Epochs: {wizard_form_data.get('epochs', '—')}\n"
+            f"- Batch size: {wizard_form_data.get('batch_size', '—')}\n"
+            f"- Data path: {eval_csv_path}\n\n"
             f"Settings:\n{format_settings_for_display(s)}",
             style={"whiteSpace": "pre-wrap"},
         )
@@ -1033,8 +954,7 @@ def register_callbacks(app):
         metrics_dict = compute_all(
             y_true=y_true,
             y_pred=y_pred,
-            min_err=leadtime,
-            max_err=3 * leadtime,
+            epsilon=leadtime,
             critical_true_lt=10.0,
             cost_fn=cost_fn,
         )
@@ -1072,3 +992,12 @@ def register_callbacks(app):
                 style={"color": "#b00020", "whiteSpace": "pre-wrap"},
             )
 
+    register_training_wizard_callbacks(
+        app,
+        settings_slug=settings_slug,
+        train_new_model=train_new_model,
+        MODELS_DIR=MODELS_DIR,
+        VISIBLE_CARD_STYLE=VISIBLE_CARD_STYLE,
+        settings_default=settings,
+        VALIDATION_CSV=VALIDATION_CSV,
+    )
