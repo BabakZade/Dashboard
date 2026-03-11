@@ -1,8 +1,8 @@
-# app.py
-import importlib.util
-import subprocess
-import sys
 
+
+
+
+# app.py
 from dash import Dash, dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 
@@ -13,17 +13,14 @@ from pages import (
     rul_distribution,
     cost_sensitive_model,
     benchmark,
-    maintenance_planning,   # ✅ NEW
+    maintenance_planning,
 )
-
-from pages.benchmark import DATA_ROWS, OUT_ROWS
 
 external_stylesheets = [
     dbc.themes.LUX,
     "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css",
 ]
 
-# Initialize the Dash app
 app = Dash(
     __name__,
     suppress_callback_exceptions=True,
@@ -35,15 +32,14 @@ app = Dash(
 server = app.server
 app.title = "Cost-sensitive predictive maintenance"
 
-# Routes and icons for the sidebar menu
 ROUTES = {
     "/": ("Home", home.layout),
     "/cost-function": ("Page 1 — Cost function", cost_function.layout),
     "/data-simulator": ("Page 2 — Data Simulator", data_simulator.layout),
     "/rul-distribution": ("Page 3 — RUL distribution", rul_distribution.layout),
     "/cost-sensitive-model": ("Page 4 — Cost sensitive model", cost_sensitive_model.layout),
-    "/maintenance-planning": ("Page 5 — Maintenance planning", maintenance_planning.layout),  # ✅ NEW
-    "/benchmark": ("Page 6 — Benchmark", benchmark.layout),  # shifted index label only
+    "/maintenance-planning": ("Page 5 — Maintenance planning", maintenance_planning.layout),
+    "/benchmark": ("Page 6 — Benchmark", benchmark.layout),
 }
 
 ICONS = {
@@ -52,124 +48,132 @@ ICONS = {
     "/data-simulator": "fa-solid fa-database",
     "/rul-distribution": "fa-solid fa-chart-area",
     "/cost-sensitive-model": "fa-solid fa-filter-circle-dollar",
-    "/maintenance-planning": "fa-solid fa-screwdriver-wrench",  # ✅ NEW icon
+    "/maintenance-planning": "fa-solid fa-screwdriver-wrench",
     "/benchmark": "fa-solid fa-chart-pie",
 }
 
 DATA_ROWS = benchmark.DATA_ROWS
 OUT_ROWS = benchmark.OUT_ROWS
 
-# Function to generate nav links with icons
+
 def nav_link(label, href, icon_class):
-    return dcc.Link(
-        html.Div(
-            [
-                html.I(className=icon_class, style={"marginRight": "10px"}),
-                label,
-            ],
-            style={"display": "flex", "alignItems": "center"},
-        ),
+    return dbc.NavLink(
+        [
+            html.I(className=icon_class, style={"marginRight": "10px"}),
+            label,
+        ],
         href=href,
-        style={
-            "display": "block",
-            "padding": "10px 12px",
-            "borderRadius": "10px",
-            "textDecoration": "none",
-            "color": "#111",
-        },
+        active="exact",
+        className="mb-1 rounded",
     )
 
-# Sidebar style
+
 def sidebar_style(is_open: bool):
     return {
-        "width": "270px" if is_open else "0px",
-        "overflow": "hidden" if not is_open else "visible",
-        "transition": "width 0.18s ease",
-        "borderRight": "1px solid #eee",
-        "backgroundColor": "white",
-        "flexShrink": 0,
-        "position": "sticky",
-        "top": "54px",
-        "height": "calc(100vh - 54px)",
+        "width": "280px" if is_open else "0px",
+        "minWidth": "280px" if is_open else "0px",
+        "maxWidth": "280px" if is_open else "0px",
+        "transition": "all 0.25s ease",
+        "overflowX": "hidden",
         "overflowY": "auto",
+        "borderRight": "1px solid #dee2e6" if is_open else "none",
+        "backgroundColor": "white",
+        "height": "calc(100vh - 64px)",
+        "position": "sticky",
+        "top": "64px",
+        "flexShrink": 0,
     }
 
-# Layout of the main page
-app.layout = html.Div(
+
+def content_style():
+    return {
+        "flex": "1 1 auto",
+        "minWidth": 0,
+        "padding": "1rem",
+        "transition": "all 0.25s ease",
+    }
+
+
+app.layout = dbc.Container(
+    fluid=True,
+    className="px-0",
     children=[
         dcc.Location(id="url", refresh=False),
-        dcc.Store(id="menu_open", data=False),
+        dcc.Store(id="menu_open", data=True),
 
-        # existing stores
         dcc.Store(id="bench_data_store", data=DATA_ROWS),
         dcc.Store(id="bench_out_store", data=OUT_ROWS),
-
-        # ✅ GLOBAL STORE for cross-page inputs
         dcc.Store(id="shared-inputs", storage_type="session"),
 
+        dbc.Navbar(
+            dbc.Container(
+                fluid=True,
+                className="d-flex align-items-center",
+                children=[
+                    dbc.Button(
+                        html.I(className="fa-solid fa-bars"),
+                        id="menu_btn",
+                        n_clicks=0,
+                        color="secondary",
+                        outline=True,
+                        className="me-3",
+                    ),
+                    html.Div(id="page_title", className="fw-bold fs-5"),
+                ],
+            ),
+            color="light",
+            dark=False,
+            sticky="top",
+            className="border-bottom shadow-sm",
+            style={"minHeight": "64px"},
+        ),
+
         html.Div(
-            id="topbar",
+            id="app_shell",
             style={
-                "position": "sticky",
-                "top": 0,
-                "zIndex": 2000,
-                "backgroundColor": "white",
-                "borderBottom": "1px solid #eee",
-                "padding": "10px 12px",
+                "display": "flex",
+                "width": "100%",
+                "minHeight": "calc(100vh - 64px)",
             },
             children=[
                 html.Div(
-                    style={"display": "flex", "alignItems": "center", "gap": "10px"},
-                    children=[
-                        html.Button(
-                            "◫",
-                            id="menu_btn",
-                            n_clicks=0,
-                            style={
-                                "fontSize": "20px",
-                                "padding": "8px 12px",
-                                "borderRadius": "10px",
-                                "border": "1px solid #ddd",
-                                "background": "white",
-                                "cursor": "pointer",
-                            },
-                        ),
-                        html.Div(id="page_title", style={"fontSize": "18px", "fontWeight": 800}),
-                    ],
-                )
-            ],
-        ),
-
-        # Shell for content and sidebar
-        html.Div(
-            id="shell",
-            style={"display": "flex", "maxWidth": "1400px", "margin": "0 auto"},
-            children=[
-                html.Div(
                     id="sidebar",
-                    style=sidebar_style(False),
+                    style=sidebar_style(True),
                     children=[
-                        html.Div("Menu", style={"fontWeight": 900, "marginBottom": "10px"}),
-                        nav_link("Home", "/", ICONS["/"]),
-                        nav_link("Cost function", "/cost-function", ICONS["/cost-function"]),
-                        nav_link("Data Simulator", "/data-simulator", ICONS["/data-simulator"]),
-                        nav_link("RUL distribution", "/rul-distribution", ICONS["/rul-distribution"]),
-                        nav_link("Cost sensitive model", "/cost-sensitive-model", ICONS["/cost-sensitive-model"]),
-                        nav_link("Maintenance planning", "/maintenance-planning", ICONS["/maintenance-planning"]),  # ✅ NEW
-                        nav_link("Benchmark", "/benchmark", ICONS["/benchmark"]),
+                        html.Div(
+                            [
+                                html.Div("Menu", className="fw-bold mb-3"),
+                                dbc.Nav(
+                                    [
+                                        nav_link("Home", "/", ICONS["/"]),
+                                        nav_link("Cost function", "/cost-function", ICONS["/cost-function"]),
+                                        nav_link("Data Simulator", "/data-simulator", ICONS["/data-simulator"]),
+                                        nav_link("RUL distribution", "/rul-distribution", ICONS["/rul-distribution"]),
+                                        nav_link("Cost sensitive model", "/cost-sensitive-model", ICONS["/cost-sensitive-model"]),
+                                        nav_link("Maintenance planning", "/maintenance-planning", ICONS["/maintenance-planning"]),
+                                        nav_link("Benchmark", "/benchmark", ICONS["/benchmark"]),
+                                    ],
+                                    vertical=True,
+                                    pills=True,
+                                    className="flex-column",
+                                ),
+                            ],
+                            className="p-3",
+                        )
                     ],
                 ),
+
                 html.Div(
                     id="content",
-                    style={"flex": 1, "padding": "16px", "minWidth": 0},
+                    style=content_style(),
                     children=[html.Div(id="page_content")],
                 ),
             ],
         ),
-    ]
+    ],
 )
 
-# Callback to toggle menu visibility
+
 @app.callback(
     Output("menu_open", "data"),
     Input("menu_btn", "n_clicks"),
@@ -177,26 +181,17 @@ app.layout = html.Div(
     prevent_initial_call=True,
 )
 def toggle_menu(_, is_open):
-    return not is_open
+    return not bool(is_open)
 
-# Callback to close the menu on navigation
-@app.callback(
-    Output("menu_open", "data", allow_duplicate=True),
-    Input("url", "pathname"),
-    prevent_initial_call=True,
-)
-def close_menu_on_nav(_):
-    return False
 
-# Apply sidebar style based on the menu state
 @app.callback(
     Output("sidebar", "style"),
     Input("menu_open", "data"),
 )
-def apply_sidebar(is_open):
+def update_sidebar(is_open):
     return sidebar_style(bool(is_open))
 
-# Update page title based on the URL
+
 @app.callback(
     Output("page_title", "children"),
     Input("url", "pathname"),
@@ -204,17 +199,19 @@ def apply_sidebar(is_open):
 def set_title(pathname):
     if not pathname:
         pathname = "/"
+
     label = ROUTES.get(pathname, ("Unknown page", None))[0]
     icon_class = ICONS.get(pathname, "fa-solid fa-circle")
+
     return html.Div(
         [
             html.I(className=icon_class, style={"marginRight": "10px"}),
             label,
         ],
-        style={"display": "flex", "alignItems": "center"},
+        className="d-flex align-items-center",
     )
 
-# Callback to render page content based on the URL
+
 @app.callback(
     Output("page_content", "children"),
     Input("url", "pathname"),
@@ -222,20 +219,21 @@ def set_title(pathname):
 def render_page(pathname):
     if not pathname:
         pathname = "/"
+
     if pathname not in ROUTES:
-        return html.Div("404 — Page not found")
+        return dbc.Alert("404 — Page not found", color="warning")
+
     return ROUTES[pathname][1]()
 
-# Register callbacks for pages
+
 home.register_callbacks(app)
 cost_function.register_callbacks(app)
 data_simulator.register_callbacks(app)
 rul_distribution.register_callbacks(app)
 cost_sensitive_model.register_callbacks(app)
-maintenance_planning.register_callbacks(app)  
+maintenance_planning.register_callbacks(app)
 benchmark.register_callbacks(app)
 
-# Set validation layout for Dash
 app.validation_layout = html.Div(
     [
         app.layout,
@@ -244,7 +242,7 @@ app.validation_layout = html.Div(
         data_simulator.layout(),
         rul_distribution.layout(),
         cost_sensitive_model.layout(),
-        maintenance_planning.layout(), 
+        maintenance_planning.layout(),
         benchmark.layout(),
     ]
 )
@@ -252,5 +250,5 @@ app.validation_layout = html.Div(
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8050))
-    app.run(debug=False, host="0.0.0.0", port=port)
-    #app.run_server(debug=False, host="0.0.0.0", port=port)
+    #app.run(debug=False, host="0.0.0.0", port=port)
+    app.run_server(debug=False, host="0.0.0.0", port=port)
