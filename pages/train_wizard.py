@@ -2,7 +2,11 @@ from dash import html, dcc, ctx
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from pathlib import Path
+from copy import deepcopy
 import uuid
+import yaml
+import dash_bootstrap_components as dbc
+
 
 MODAL_OVERLAY_HIDDEN = {
     "display": "none",
@@ -67,6 +71,189 @@ WIZARD_BODY_SCROLL_STYLE = {
     "minHeight": 0,
 }
 
+FIELDS_2COL_STYLE = {
+    "display": "grid",
+    "gridTemplateColumns": "1fr 1fr",
+    "gap": "20px 24px",
+    "alignItems": "start",
+}
+
+
+DEFAULT_TRAINING_CONFIG = {
+    "experiment": {
+        "name": "cost_sensitivity",
+        "readme": "Analyzing cost weighting",
+        "top_n_settings": 3,
+        "top_n_front": 3,
+    },
+    "general": {
+        "precision": 4,
+        "k_in_tanh": 1,
+        "n_jobs": -1,
+        "welch_bins_keep": 10,
+    },
+    "logging": {
+        "console_steps": True,
+        "console_info": True,
+        "console_errors": True,
+        "console_warnings": True,
+        "console_debuge": True,
+        "console_debuge_detail": True,
+        "debug_save": True,
+        "debug_dir": "logs",
+        "debug_detail_custom_losses": False,
+        "level": "DEBUG",
+        "console_level": "INFO",
+        "file_level": "DEBUG",
+        "log_to_file": True,
+        "log_filename": "run.log",
+        "rotate_logs": True,
+        "max_log_size_mb": 10,
+        "backup_logs": 3,
+        "verbosity": True,
+        "save_model_diagnostic": True,
+    },
+    "savecsv": {
+        "sep": ";",
+        "decimal": ",",
+        "index": False,
+        "header": True,
+        "encoding": "utf-8",
+        "quoting": 0,
+        "float_format": "%.5f",
+    },
+    "model": {
+        "seed": 42,
+        "train_frac": 0.7,
+        "val_frac": 0.1,
+        "test_frac": 0.2,
+        "calibration_frac": 0.1,
+        "outer_k_fold": 3,
+        "inner_k_fold": 3,
+        "test_count_perID": 1,
+        "trials": 4,
+        "tuning_time_limit": 1800,
+        "primary_metric": "prmc",
+        "secondary_metric": "rmse",
+        "engine_id_overlap": False,
+        "label_window_overlap": True,
+        "top_n_features": 20,
+        "min_req_features": 4,
+        "max_req_features": 1000,
+        "CI_alpha": 0.1,
+        "f_engineer": True,
+        "integer_regularization": 0.01,
+        "upper_bound": {
+            "quantile": 0.995,
+            "regularization": 0.02,
+        },
+        "positive_prediction": True,
+    },
+    "figure": {
+        "style": "whitegrid",
+        "palette": "viridis",
+        "dpi": 150,
+        "fontsize": {
+            "title": 14,
+            "axis_title": 12,
+            "tick": 9,
+            "legend": 9,
+            "annot": 7,
+        },
+        "save": True,
+        "format": ["png", "svg"],
+        "bin": 30,
+        "focus": 2,
+        "id_grid": 15,
+    },
+    "problem": {
+        "lead_time": 1,
+        "emrgency_response_time": 0,
+        "rul_thresh": 60,
+        "slice_window": 2,
+        "slice_shift": 2,
+        "cost_weight": 1.0,
+        "early_penalty": 1,
+        "late_penalty": 10,
+        "emergency_penalty": 10,
+        "cost_reactive": 200,
+        "cost_predictive": 20,
+        "normalize": True,
+        "slicer_output": 1,
+        "instance_dependent_cost_sensitive": False,
+        "rul_distribution": {
+            "error_dist": "normal",
+            "sampling": 32,
+            "shape_param": 1.5,
+            "scale_param": 50,
+        },
+    },
+    "cleaning": {
+        "distinct_thresh": 0,
+        "correlation_thresh": 0.98,
+        "correlation_minimum": 0.08,
+        "missing_col_thresh": 0.4,
+        "missing_row_thresh": 0.5,
+        "outlier_method": "iqr",
+        "outlier_threshold": 3,
+    },
+    "paths": {
+        "project_root": "",
+        "models_src": "outputs/",
+        "experiment_dir": "",
+        "trained_models": "trained_models/",
+        "model_analysis": "model_analysis/",
+        "result_dir": "results/",
+        "notebook_dir": "notebooks/",
+        "scripts_dir": "scripts/",
+    },
+    "database": {
+        "cmapss": {
+            "raw": "data/cmapss/",
+            "processed": "data/cmapss/processed/",
+            "connection_string": "postgresql://user:pass@localhost/db",
+            "query": "SELECT * FROM cmapss_table",
+        },
+        "ncmpss": {
+            "raw": "data/ncmpss/",
+            "processed": "data/ncmpss/processed/",
+            "connection_string": "postgresql://user:pass@localhost/db",
+            "query": "SELECT * FROM ncmpss_table",
+        },
+        "phm": {
+            "raw": "data/phm/",
+            "processed": "data/phm/processed/",
+            "connection_string": "postgresql://user:pass@localhost/db",
+            "query": "SELECT * FROM cmapss_table",
+        },
+        "phm2008": {
+            "raw": "data/phm2008/",
+            "processed": "data/phm2008/processed/",
+            "connection_string": "postgresql://user:pass@localhost/db",
+            "query": "SELECT * FROM cmapss_table",
+        },
+        "ev": {
+            "raw": "data/ev/raw/",
+            "processed": "data/ev/processed/",
+            "connection_string": "mysql://user:pass@localhost/ev",
+            "query": "SELECT * FROM ev_table",
+        },
+        "btry": {
+            "raw": "data/btry/",
+            "processed": "data/btry/processed/",
+            "connection_string": "mysql://user:pass@localhost/btry",
+            "query": "SELECT * FROM ev_table",
+        },
+        "simulated_bpost": {
+            "raw": "data/simulated_bpost/",
+            "processed": "data/simulated_bpost/processed/",
+            "connection_string": "mysql://user:pass@localhost/btry",
+            "query": "SELECT * FROM ev_table",
+        },
+    },
+    "selected_dataset": "cmapss",
+}
+
 
 def _summary_row(label, value):
     return html.Div(
@@ -81,6 +268,144 @@ def _summary_row(label, value):
             "borderBottom": "1px solid #E5E7EB",
         },
     )
+
+
+def _compact_number_row(
+    unit_text,
+    input_id,
+    param_name,
+    *,
+    value=None,
+    min_value=0,
+    max_value=100,
+    step=1,
+    disabled=False,
+    input_style=None,
+    unit_width="110px",
+    class_name="mb-0",
+    persistence=True,
+):
+    return html.Div(
+        [
+            html.Div(
+                [
+                    dbc.InputGroup(
+                        [
+                            dbc.InputGroupText(
+                                unit_text,
+                                style={
+                                    "minWidth": unit_width,
+                                    "justifyContent": "center",
+                                    "borderBottom": "0",
+                                    "borderBottomLeftRadius": "12px",
+                                },
+                            ),
+                            dbc.Input(
+                                id=input_id,
+                                type="number",
+                                value=value if value is not None else None,
+                                min=min_value,
+                                max=max_value,
+                                step=step,
+                                disabled=disabled,
+                                placeholder=param_name,
+                                persistence=persistence,
+                                persistence_type="session",
+                                debounce=False,
+                                style={
+                                    "flex": "1",
+                                    "borderBottom": "0",
+                                    "paddingBottom": "14px",
+                                    "boxShadow": "none",
+                                    "outline": "none",
+                                    "backgroundColor": "transparent",
+                                    "backgroundClip": "padding-box",
+                                    **(input_style or {}),
+                                }
+                            ),
+                        ],
+                        style={"width": "100%"},
+                    ),
+                    dbc.Progress(
+                        id=f"{input_id}-progress",
+                        value=0,
+                        striped=True,
+                        animated=True,
+                        style={
+                            "position": "absolute",
+                            "left": "0",
+                            "right": "0",
+                            "bottom": "0",
+                            "height": "8px",
+                            "borderTopLeftRadius": "0",
+                            "borderTopRightRadius": "0",
+                            "borderBottomLeftRadius": "12px",
+                            "borderBottomRightRadius": "12px",
+                            "overflow": "hidden",
+                            "margin": "0",
+                        },
+                    ),
+                ],
+                style={
+                    "position": "relative",
+                    "width": "100%",
+                },
+            ),
+        ],
+        className=class_name,
+        style={"width": "100%"},
+    )
+
+
+def _compact_dropdown_row(
+    dropdown_component,
+    *,
+    class_name="mb-0",
+):
+    return html.Div(
+        dropdown_component,
+        className=class_name,
+        style={"width": "100%"},
+    )
+
+
+def build_training_config(form_data: dict, save_dir: Path, experiment_name: str) -> dict:
+    config = deepcopy(DEFAULT_TRAINING_CONFIG)
+    form_data = form_data or {}
+
+    selected_dataset = form_data.get("dataset", config.get("selected_dataset", "cmapss"))
+    instance_dependent = bool(form_data.get("instance_dependent_cost", False))
+
+    config["experiment"]["name"] = experiment_name
+    config["experiment"]["readme"] = f"Wizard-generated config for dataset {selected_dataset}"
+    config["paths"]["experiment_dir"] = str(save_dir)
+    config["selected_dataset"] = selected_dataset
+
+    config["problem"]["slice_window"] = form_data.get("slice_window") or config["problem"]["slice_window"]
+    config["problem"]["slice_shift"] = config["problem"]["slice_window"]
+    config["problem"]["slicer_output"] = form_data.get("slicer_output") or config["problem"]["slicer_output"]
+    config["problem"]["instance_dependent_cost_sensitive"] = instance_dependent
+    config["problem"]["lead_time"] = form_data.get("lead_time") or config["problem"]["lead_time"]
+    config["problem"]["cost_weight"] = form_data.get("cost_weight") or config["problem"]["cost_weight"]
+    config["problem"]["early_penalty"] = form_data.get("early_penalty") or config["problem"]["early_penalty"]
+    config["problem"]["late_penalty"] = form_data.get("late_penalty") or config["problem"]["late_penalty"]
+    config["problem"]["cost_reactive"] = form_data.get("cost_reactive") or config["problem"]["cost_reactive"]
+    config["problem"]["cost_predictive"] = form_data.get("cost_predictive") or config["problem"]["cost_predictive"]
+
+    config["model"]["outer_k_fold"] = form_data.get("outer_k_fold") or config["model"]["outer_k_fold"]
+    config["model"]["inner_k_fold"] = form_data.get("inner_k_fold") or config["model"]["inner_k_fold"]
+    config["model"]["trials"] = form_data.get("trials") or config["model"]["trials"]
+    config["model"]["tuning_time_limit"] = form_data.get("tuning_time_limit") or config["model"]["tuning_time_limit"]
+
+    return config
+
+
+def write_training_config(config: dict, save_dir: Path) -> Path:
+    save_dir.mkdir(parents=True, exist_ok=True)
+    config_path = save_dir / "config.yaml"
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
+    return config_path
 
 
 def render_training_step(step: int, settings: dict, form_data: dict, validation_csv: str):
@@ -100,27 +425,37 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
             [
                 html.H4("Data time-slice settings"),
                 html.P("Define how the time window is sliced and represented for model input."),
-                html.Label("Slice window"),
-                dcc.Input(
-                    id="wizard-slice-window",
-                    type="number",
-                    value=form_data.get("slice_window", settings.get("slice_window", 2)),
-                    min=1,
-                    step=1,
-                    style={"width": "100%", "marginBottom": "12px"},
-                ),
-                html.Label("Time-window representation"),
-                dcc.Dropdown(
-                    id="wizard-slicer-output",
-                    options=[
-                        {"label": "Flatten all time-window features", "value": 1},
-                        {"label": "Average of each feature over the time window", "value": 2},
-                        {"label": "Standard deviation of each feature over the time window", "value": 3},
-                        {"label": "Average and standard deviation per feature", "value": 4},
-                        {"label": "Flattened features plus summary statistics", "value": 5},
+                html.Div(
+                    [
+                        _compact_number_row(
+                            "T",
+                            "wizard-slice-window",
+                            "Length of slice window",
+                            value=form_data.get("slice_window"),
+                            min_value=1,
+                            max_value=100,
+                            step=1,
+                        ),
+                        _compact_dropdown_row(
+                            dcc.Dropdown(
+                                id="wizard-slicer-output",
+                                options=[
+                                    {"label": "Choose slicer output", "value": 0},
+                                    {"label": "Flatten all time-window features", "value": 1},
+                                    {"label": "Average of each feature over the time window", "value": 2},
+                                    {"label": "Standard deviation of each feature over the time window", "value": 3},
+                                    {"label": "Average and standard deviation per feature", "value": 4},
+                                    {"label": "Flattened features plus summary statistics", "value": 5},
+                                ],
+                                value=form_data.get("slicer_output"),
+                                clearable=True,
+                                placeholder="Choose slicer output",
+                                persistence=True,
+                                persistence_type="session",
+                            )
+                        ),
                     ],
-                    value=form_data.get("slicer_output", settings.get("slicer_output", 1)),
-                    clearable=False,
+                    style=FIELDS_2COL_STYLE,
                 ),
             ],
             style=STEP_CONTENT_STYLE,
@@ -133,48 +468,36 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
         )
         manual_disabled = bool(instance_dependent)
 
-        input_style = {
-            "width": "100%",
-            "marginBottom": "12px",
-        }
-        input_style_last = {
-            "width": "100%",
-            "marginBottom": "0px",
-        }
-
+        input_style = {}
         if manual_disabled:
             input_style = {
-                **input_style,
-                "backgroundColor": "#F3F4F6",
-                "color": "#9CA3AF",
-                "cursor": "not-allowed",
-            }
-            input_style_last = {
-                **input_style_last,
                 "backgroundColor": "#F3F4F6",
                 "color": "#9CA3AF",
                 "cursor": "not-allowed",
             }
 
-        label_style = {"color": "#9CA3AF"} if manual_disabled else {}
         section_style = {"marginTop": "0", "color": "#9CA3AF"} if manual_disabled else {"marginTop": "0"}
+
+        column_style = {
+            "flex": "1 1 0",
+            "minWidth": "0",
+        }
 
         body = html.Div(
             [
                 html.H4("Cost function"),
                 html.P("Define maintenance costs and fleet-related settings."),
                 html.Label("Cost setting mode"),
-                dcc.Checklist(
-                    id="wizard-instance-dependent-cost",
-                    options=[
-                        {
-                            "label": " Instance-dependent cost-sensitive",
-                            "value": True,
-                        }
+                html.Div(
+                    [
+                        dbc.Switch(
+                            id="wizard-instance-dependent-cost",
+                            value=bool(instance_dependent),
+                            label="Instance-dependent cost-sensitive",
+                            className="mb-2",
+                        ),
                     ],
-                    value=[True] if instance_dependent else [],
-                    inputStyle={"marginRight": "8px"},
-                    style={"marginBottom": "6px"},
+                    style={"marginBottom": "10px"},
                 ),
                 html.Div(
                     "If selected, the data should include: weight, leadtime, reactive_cost, predictive_cost, downtime_cost, rul_cost.",
@@ -193,82 +516,52 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     id="title-maintenance-cost",
                                     style=section_style,
                                 ),
-                                html.Label(
+                                _compact_number_row(
+                                    "$",
+                                    "wizard-cost-predictive",
                                     "Predictive maintenance cost",
-                                    id="label-cost-predictive",
-                                    style=label_style,
-                                ),
-                                dcc.Input(
-                                    id="wizard-cost-predictive",
-                                    type="number",
-                                    value=form_data.get("cost_predictive", settings.get("cost_predictive", 20)),
-                                    min=0,
-                                    step=1,
+                                    value=form_data.get("cost_predictive"),
+                                    min_value=0,
+                                    max_value=100,
+                                    step=10,
                                     disabled=manual_disabled,
-                                    style=input_style,
+                                    input_style=input_style,
                                 ),
-                                html.Label(
+                                _compact_number_row(
+                                    "$",
+                                    "wizard-cost-reactive",
                                     "Reactive maintenance cost",
-                                    id="label-cost-reactive",
-                                    style=label_style,
-                                ),
-                                dcc.Input(
-                                    id="wizard-cost-reactive",
-                                    type="number",
-                                    value=form_data.get("cost_reactive", settings.get("cost_reactive", 200)),
-                                    min=0,
-                                    step=1,
+                                    value=form_data.get("cost_reactive"),
+                                    min_value=0,
+                                    max_value=10000,
+                                    step=100,
                                     disabled=manual_disabled,
-                                    style=input_style,
+                                    input_style=input_style,
                                 ),
-                                html.Label(
+                                _compact_number_row(
+                                    "$/T",
+                                    "wizard-early-penalty",
                                     "Early maintenance penalty",
-                                    id="label-early-penalty",
-                                    style=label_style,
-                                ),
-                                dcc.Input(
-                                    id="wizard-early-penalty",
-                                    type="number",
-                                    value=form_data.get("early_penalty", settings.get("early_penalty", 1)),
-                                    min=0,
+                                    value=form_data.get("early_penalty"),
+                                    min_value=0,
+                                    max_value=10,
                                     step=1,
                                     disabled=manual_disabled,
-                                    style=input_style,
+                                    input_style=input_style,
                                 ),
-                                html.Label(
+                                _compact_number_row(
+                                    "$/T",
+                                    "wizard-late-penalty",
                                     "Late maintenance penalty",
-                                    id="label-late-penalty",
-                                    style=label_style,
-                                ),
-                                dcc.Input(
-                                    id="wizard-late-penalty",
-                                    type="number",
-                                    value=form_data.get("late_penalty", settings.get("late_penalty", 10)),
-                                    min=0,
-                                    step=1,
+                                    value=form_data.get("late_penalty"),
+                                    min_value=0,
+                                    max_value=100,
+                                    step=10,
                                     disabled=manual_disabled,
-                                    style=input_style,
-                                ),
-                                html.Label(
-                                    "Emergency maintenance penalty",
-                                    id="label-emergency-penalty",
-                                    style=label_style,
-                                ),
-                                dcc.Input(
-                                    id="wizard-emergency-penalty",
-                                    type="number",
-                                    value=form_data.get("emergency_penalty", settings.get("emergency_penalty", 10)),
-                                    min=0,
-                                    step=1,
-                                    disabled=manual_disabled,
-                                    style=input_style_last,
+                                    input_style=input_style,
                                 ),
                             ],
-                            style={
-                                "flex": "1",
-                                "minWidth": "280px",
-                                "opacity": 0.65 if manual_disabled else 1,
-                            },
+                            style=column_style,
                         ),
                         html.Div(
                             [
@@ -277,47 +570,36 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     id="title-fleet-characteristics",
                                     style=section_style,
                                 ),
-                                html.Label(
+                                _compact_number_row(
+                                    "day",
+                                    "wizard-lead-time",
                                     "Lead time",
-                                    id="label-lead-time",
-                                    style=label_style,
+                                    value=form_data.get("lead_time"),
+                                    min_value=0,
+                                    max_value=365,
+                                    step=7,
+                                    disabled=manual_disabled,
+                                    input_style=input_style,
                                 ),
-                                dcc.Input(
-                                    id="wizard-lead-time",
-                                    type="number",
-                                    value=form_data.get("lead_time", settings.get("lead_time", 1)),
-                                    min=0,
+                                _compact_number_row(
+                                    "w",
+                                    "wizard-cost-weight",
+                                    "Importance weight",
+                                    value=form_data.get("cost_weight"),
+                                    min_value=0,
+                                    max_value=10,
                                     step=1,
                                     disabled=manual_disabled,
-                                    style=input_style,
-                                ),
-                                html.Label(
-                                    "Importance weight",
-                                    id="label-cost-weight",
-                                    style=label_style,
-                                ),
-                                dcc.Input(
-                                    id="wizard-cost-weight",
-                                    type="number",
-                                    value=form_data.get("cost_weight", settings.get("cost_weight", 1.0)),
-                                    min=0,
-                                    step=0.1,
-                                    disabled=manual_disabled,
-                                    style=input_style_last,
+                                    input_style=input_style,
                                 ),
                             ],
-                            style={
-                                "flex": "1",
-                                "minWidth": "280px",
-                                "opacity": 0.65 if manual_disabled else 1,
-                            },
+                            style=column_style,
                         ),
                     ],
                     style={
                         "display": "flex",
-                        "gap": "24px",
+                        "gap": "36px",
                         "alignItems": "flex-start",
-                        "flexWrap": "wrap",
                     },
                 ),
             ],
@@ -325,6 +607,11 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
         )
 
     elif step == 3:
+        column_style = {
+            "flex": "1 1 0",
+            "minWidth": "0",
+        }
+
         body = html.Div(
             [
                 html.H4("Training setup"),
@@ -333,64 +620,57 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                     [
                         html.Div(
                             [
-                                html.H5("Cross-validation", style={"marginTop": "0"}),
-                                html.Label("Outer K-fold"),
-                                dcc.Input(
-                                    id="wizard-outer-k-fold",
-                                    type="number",
-                                    value=form_data.get("outer_k_fold", settings.get("outer_k_fold", 5)),
-                                    min=2,
+                                html.H5("Cross-validation settings", style={"marginTop": "0", "marginBottom": "16px"}),
+                                _compact_number_row(
+                                    "K",
+                                    "wizard-outer-k-fold",
+                                    "#Outer K-fold CV",
+                                    value=form_data.get("outer_k_fold"),
+                                    min_value=2,
+                                    max_value=10,
                                     step=1,
-                                    style={"width": "100%", "marginBottom": "12px"},
                                 ),
-                                html.Label("Inner K-fold"),
-                                dcc.Input(
-                                    id="wizard-inner-k-fold",
-                                    type="number",
-                                    value=form_data.get("inner_k_fold", settings.get("inner_k_fold", 10)),
-                                    min=2,
+                                _compact_number_row(
+                                    "K",
+                                    "wizard-inner-k-fold",
+                                    "#Inner K-fold",
+                                    value=form_data.get("inner_k_fold"),
+                                    min_value=2,
+                                    max_value=10,
                                     step=1,
-                                    style={"width": "100%"},
                                 ),
                             ],
-                            style={
-                                "flex": "1",
-                                "minWidth": "280px",
-                            },
+                            style=column_style,
                         ),
                         html.Div(
                             [
-                                html.H5("Hyperparameter tuning", style={"marginTop": "0"}),
-                                html.Label("Number of trials"),
-                                dcc.Input(
-                                    id="wizard-trials",
-                                    type="number",
-                                    value=form_data.get("trials", settings.get("trials", 64)),
-                                    min=1,
-                                    step=1,
-                                    style={"width": "100%", "marginBottom": "12px"},
+                                html.H5("Hyperparameter tuning settings", style={"marginTop": "0", "marginBottom": "16px"}),
+                                _compact_number_row(
+                                    "n",
+                                    "wizard-trials",
+                                    "# Number of trials",
+                                    value=form_data.get("trials", settings.get("trials", 4)),
+                                    min_value=1,
+                                    max_value=256,
+                                    step=8,
                                 ),
-                                html.Label("Tuning time limit (seconds)"),
-                                dcc.Input(
-                                    id="wizard-tuning-time-limit",
-                                    type="number",
-                                    value=form_data.get("tuning_time_limit", settings.get("tuning_time_limit", 1800)),
-                                    min=1,
-                                    step=1,
-                                    style={"width": "100%"},
+                                _compact_number_row(
+                                    "Sec.",
+                                    "wizard-tuning-time-limit",
+                                    "Tuning time limit",
+                                    value=form_data.get("tuning_time_limit"),
+                                    min_value=1,
+                                    max_value=7200,
+                                    step=60,
                                 ),
                             ],
-                            style={
-                                "flex": "1",
-                                "minWidth": "280px",
-                            },
+                            style=column_style,
                         ),
                     ],
                     style={
                         "display": "flex",
-                        "gap": "24px",
+                        "gap": "36px",
                         "alignItems": "flex-start",
-                        "flexWrap": "wrap",
                     },
                 ),
             ],
@@ -402,19 +682,23 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
             [
                 html.H4("Dataset"),
                 html.P("Select the dataset to use for training."),
-                html.Label("Dataset"),
-                dcc.Dropdown(
-                    id="wizard-dataset",
-                    options=[
-                        {"label": "ncmpss", "value": "ncmpss"},
-                        {"label": "btry", "value": "btry"},
-                        {"label": "phm2008", "value": "phm2008"},
-                        {"label": "cmapss", "value": "cmapss"},
-                        {"label": "phm", "value": "phm"},
-                    ],
-                    value=form_data.get("dataset", settings.get("dataset", "cmapss")),
-                    clearable=False,
-                    style={"width": "100%"},
+                _compact_dropdown_row(
+                    dcc.Dropdown(
+                        id="wizard-dataset",
+                        options=[
+                            {"label": "Choose Dataset", "value": "choose_dataset"},
+                            {"label": "ncmpss", "value": "ncmpss"},
+                            {"label": "btry", "value": "btry"},
+                            {"label": "phm2008", "value": "phm2008"},
+                            {"label": "cmapss", "value": "cmapss"},
+                            {"label": "phm", "value": "phm"},
+                        ],
+                        value=form_data.get("dataset"),
+                        clearable=True,
+                        placeholder="Choose dataset",
+                        persistence=True,
+                        persistence_type="session",
+                    )
                 ),
             ],
             style=STEP_CONTENT_STYLE,
@@ -425,11 +709,21 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
         effective.update(form_data or {})
 
         slicer_output_map = {
+            0: "Choose slicer output",
             1: "Flatten all time-window features",
             2: "Average of each feature over the time window",
             3: "Standard deviation of each feature over the time window",
             4: "Average and standard deviation per feature",
             5: "Flattened features plus summary statistics",
+        }
+
+        dataset_map = {
+            "choose_dataset": "Choose dataset",
+            "ncmpss": "ncmpss",
+            "btry": "btry",
+            "phm2008": "phm2008",
+            "cmapss": "cmapss",
+            "phm": "phm",
         }
 
         preview_rows = [
@@ -455,7 +749,6 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                     _summary_row("Reactive maintenance cost", effective.get("cost_reactive")),
                     _summary_row("Early maintenance penalty", effective.get("early_penalty")),
                     _summary_row("Late maintenance penalty", effective.get("late_penalty")),
-                    _summary_row("Emergency maintenance penalty", effective.get("emergency_penalty")),
                     _summary_row("Lead time", effective.get("lead_time")),
                     _summary_row("Importance weight", effective.get("cost_weight")),
                 ]
@@ -479,7 +772,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                 _summary_row("Number of trials", effective.get("trials")),
                 _summary_row("Tuning time limit (seconds)", effective.get("tuning_time_limit")),
                 html.H5("Dataset", style={"marginTop": "20px"}),
-                _summary_row("Dataset", effective.get("dataset")),
+                _summary_row("Dataset", dataset_map.get(effective.get("dataset"), effective.get("dataset"))),
             ]
         )
 
@@ -639,35 +932,25 @@ def register_training_wizard_callbacks(
         return back_style, next_style, finish_style
 
     @app.callback(
-        Output("train-wizard-form-store", "data", allow_duplicate=True),
-        Input("btn-wizard-next", "n_clicks"),
-        Input("btn-wizard-back", "n_clicks"),
-        Input("btn-close-wizard", "n_clicks"),
-        State("train-wizard-step", "data"),
+        Output("train-wizard-form-store", "data"),
+        Input("wizard-slice-window", "value"),
+        Input("wizard-slicer-output", "value"),
+        Input("wizard-instance-dependent-cost", "value"),
+        Input("wizard-cost-predictive", "value"),
+        Input("wizard-cost-reactive", "value"),
+        Input("wizard-early-penalty", "value"),
+        Input("wizard-late-penalty", "value"),
+        Input("wizard-lead-time", "value"),
+        Input("wizard-cost-weight", "value"),
+        Input("wizard-outer-k-fold", "value"),
+        Input("wizard-inner-k-fold", "value"),
+        Input("wizard-trials", "value"),
+        Input("wizard-tuning-time-limit", "value"),
+        Input("wizard-dataset", "value"),
         State("train-wizard-form-store", "data"),
-        State("wizard-slice-window", "value"),
-        State("wizard-slicer-output", "value"),
-        State("wizard-instance-dependent-cost", "value"),
-        State("wizard-cost-predictive", "value"),
-        State("wizard-cost-reactive", "value"),
-        State("wizard-early-penalty", "value"),
-        State("wizard-late-penalty", "value"),
-        State("wizard-emergency-penalty", "value"),
-        State("wizard-lead-time", "value"),
-        State("wizard-cost-weight", "value"),
-        State("wizard-outer-k-fold", "value"),
-        State("wizard-inner-k-fold", "value"),
-        State("wizard-trials", "value"),
-        State("wizard-tuning-time-limit", "value"),
-        State("wizard-dataset", "value"),
-        prevent_initial_call=True,
+        prevent_initial_call=False,
     )
     def persist_wizard_form_data(
-        n_next,
-        n_back,
-        n_close,
-        step,
-        form_data,
         wizard_slice_window,
         wizard_slicer_output,
         wizard_instance_dependent_cost,
@@ -675,7 +958,6 @@ def register_training_wizard_callbacks(
         wizard_cost_reactive,
         wizard_early_penalty,
         wizard_late_penalty,
-        wizard_emergency_penalty,
         wizard_lead_time,
         wizard_cost_weight,
         wizard_outer_k_fold,
@@ -683,36 +965,47 @@ def register_training_wizard_callbacks(
         wizard_trials,
         wizard_tuning_time_limit,
         wizard_dataset,
+        form_data,
     ):
         form_data = dict(form_data or {})
-        step = step or 1
 
-        instance_dependent = bool(
-            wizard_instance_dependent_cost and True in wizard_instance_dependent_cost
-        )
-
-        if step == 1:
+        if wizard_slice_window is not None:
             form_data["slice_window"] = wizard_slice_window
-            form_data["slicer_output"] = wizard_slicer_output
 
-        elif step == 2:
-            form_data["instance_dependent_cost"] = instance_dependent
+        if wizard_slicer_output not in (None, 0):
+            form_data["slicer_output"] = wizard_slicer_output
+        else:
+            form_data.pop("slicer_output", None)
+
+        if wizard_instance_dependent_cost is not None:
+            form_data["instance_dependent_cost"] = bool(wizard_instance_dependent_cost)
+
+        if wizard_cost_predictive is not None:
             form_data["cost_predictive"] = wizard_cost_predictive
+        if wizard_cost_reactive is not None:
             form_data["cost_reactive"] = wizard_cost_reactive
+        if wizard_early_penalty is not None:
             form_data["early_penalty"] = wizard_early_penalty
+        if wizard_late_penalty is not None:
             form_data["late_penalty"] = wizard_late_penalty
-            form_data["emergency_penalty"] = wizard_emergency_penalty
+        if wizard_lead_time is not None:
             form_data["lead_time"] = wizard_lead_time
+        if wizard_cost_weight is not None:
             form_data["cost_weight"] = wizard_cost_weight
 
-        elif step == 3:
+        if wizard_outer_k_fold is not None:
             form_data["outer_k_fold"] = wizard_outer_k_fold
+        if wizard_inner_k_fold is not None:
             form_data["inner_k_fold"] = wizard_inner_k_fold
+        if wizard_trials is not None:
             form_data["trials"] = wizard_trials
+        if wizard_tuning_time_limit is not None:
             form_data["tuning_time_limit"] = wizard_tuning_time_limit
 
-        elif step == 4:
+        if wizard_dataset not in (None, "choose_dataset"):
             form_data["dataset"] = wizard_dataset
+        else:
+            form_data.pop("dataset", None)
 
         return form_data
 
@@ -729,17 +1022,16 @@ def register_training_wizard_callbacks(
         Input("btn-wizard-finish", "n_clicks"),
         State("settings-store", "data"),
         State("train-wizard-form-store", "data"),
-        State("wizard-dataset", "value"),
         prevent_initial_call=True,
     )
-    def finish_training_from_wizard(n_finish, s, form_data, wizard_dataset):
+    def finish_training_from_wizard(n_finish, s, form_data):
         if not n_finish or not s:
             raise PreventUpdate
 
         form_data = dict(form_data or {})
         s = dict(s or {})
 
-        form_data["dataset"] = wizard_dataset or form_data.get("dataset", s.get("dataset"))
+        form_data["dataset"] = form_data.get("dataset", s.get("dataset"))
         instance_dependent = form_data.get("instance_dependent_cost", False)
 
         for key in [
@@ -761,7 +1053,6 @@ def register_training_wizard_callbacks(
                 "cost_reactive",
                 "early_penalty",
                 "late_penalty",
-                "emergency_penalty",
                 "lead_time",
                 "cost_weight",
             ]:
@@ -771,6 +1062,14 @@ def register_training_wizard_callbacks(
         assets_path = Path(MODELS_DIR)
         desired = settings_slug(s)
         desired_path = assets_path / desired
+        desired_path.mkdir(parents=True, exist_ok=True)
+
+        config = build_training_config(
+            form_data=form_data,
+            save_dir=desired_path,
+            experiment_name=desired,
+        )
+        write_training_config(config=config, save_dir=desired_path)
 
         train_new_model(
             target_settings=s,
@@ -797,65 +1096,34 @@ def register_training_wizard_callbacks(
         Output("wizard-cost-reactive", "disabled"),
         Output("wizard-early-penalty", "disabled"),
         Output("wizard-late-penalty", "disabled"),
-        Output("wizard-emergency-penalty", "disabled"),
         Output("wizard-lead-time", "disabled"),
         Output("wizard-cost-weight", "disabled"),
         Output("wizard-cost-predictive", "style"),
         Output("wizard-cost-reactive", "style"),
         Output("wizard-early-penalty", "style"),
         Output("wizard-late-penalty", "style"),
-        Output("wizard-emergency-penalty", "style"),
         Output("wizard-lead-time", "style"),
         Output("wizard-cost-weight", "style"),
-        Output("label-cost-predictive", "style"),
-        Output("label-cost-reactive", "style"),
-        Output("label-early-penalty", "style"),
-        Output("label-late-penalty", "style"),
-        Output("label-emergency-penalty", "style"),
-        Output("label-lead-time", "style"),
-        Output("label-cost-weight", "style"),
         Output("title-maintenance-cost", "style"),
         Output("title-fleet-characteristics", "style"),
         Input("wizard-instance-dependent-cost", "value"),
         prevent_initial_call=False,
     )
     def toggle_instance_dependent_cost_fields(instance_value):
-        instance_dependent = bool(instance_value and True in instance_value)
+        instance_dependent = bool(instance_value)
 
-        base_enabled = {
-            "width": "100%",
-            "marginBottom": "12px",
-        }
-        base_disabled = {
-            "width": "100%",
-            "marginBottom": "12px",
+        enabled_style = {}
+        disabled_style = {
             "backgroundColor": "#F3F4F6",
             "color": "#9CA3AF",
             "cursor": "not-allowed",
         }
-
-        enabled_last = {
-            "width": "100%",
-            "marginBottom": "0px",
-        }
-        disabled_last = {
-            "width": "100%",
-            "marginBottom": "0px",
-            "backgroundColor": "#F3F4F6",
-            "color": "#9CA3AF",
-            "cursor": "not-allowed",
-        }
-
-        label_enabled = {}
-        label_disabled = {"color": "#9CA3AF"}
 
         section_enabled = {"marginTop": "0"}
         section_disabled = {"marginTop": "0", "color": "#9CA3AF"}
 
-        normal_style = base_disabled if instance_dependent else base_enabled
-        last_style = disabled_last if instance_dependent else enabled_last
-        label_style = label_disabled if instance_dependent else label_enabled
-        section_style = section_disabled if instance_dependent else section_enabled
+        field_style = disabled_style if instance_dependent else enabled_style
+        heading_style = section_disabled if instance_dependent else section_enabled
 
         return (
             instance_dependent,
@@ -864,21 +1132,146 @@ def register_training_wizard_callbacks(
             instance_dependent,
             instance_dependent,
             instance_dependent,
-            instance_dependent,
-            normal_style,
-            normal_style,
-            normal_style,
-            normal_style,
-            last_style,
-            normal_style,
-            last_style,
-            label_style,
-            label_style,
-            label_style,
-            label_style,
-            label_style,
-            label_style,
-            label_style,
-            section_style,
-            section_style,
+            field_style,
+            field_style,
+            field_style,
+            field_style,
+            field_style,
+            field_style,
+            heading_style,
+            heading_style,
         )
+
+    @app.callback(
+        Output("wizard-slice-window-progress", "value"),
+        Output("wizard-slice-window-progress", "color"),
+        Input("wizard-slice-window", "value"),
+        prevent_initial_call=False,
+    )
+    def update_step1_progress(value):
+        if value is None:
+            p = 0
+        else:
+            value = max(1, min(value, 100))
+            p = (value - 1) / (100 - 1) * 100
+
+        if p < 25:
+            color = "warning"
+        elif p < 75:
+            color = "success"
+        else:
+            color = "danger"
+
+        return p, color
+    
+
+    @app.callback(
+        Output("wizard-cost-predictive-progress", "value"),
+        Output("wizard-cost-predictive-progress", "color"),
+        Output("wizard-cost-reactive-progress", "value"),
+        Output("wizard-cost-reactive-progress", "color"),
+        Output("wizard-early-penalty-progress", "value"),
+        Output("wizard-early-penalty-progress", "color"),
+        Output("wizard-late-penalty-progress", "value"),
+        Output("wizard-late-penalty-progress", "color"),
+        Output("wizard-lead-time-progress", "value"),
+        Output("wizard-lead-time-progress", "color"),
+        Output("wizard-cost-weight-progress", "value"),
+        Output("wizard-cost-weight-progress", "color"),
+        Input("wizard-cost-predictive", "value"),
+        Input("wizard-cost-reactive", "value"),
+        Input("wizard-early-penalty", "value"),
+        Input("wizard-late-penalty", "value"),
+        Input("wizard-lead-time", "value"),
+        Input("wizard-cost-weight", "value"),
+        prevent_initial_call=False,
+    )
+    def update_step2_progress(
+        cost_predictive,
+        cost_reactive,
+        early_penalty,
+        late_penalty,
+        lead_time,
+        cost_weight,
+    ):
+        def pct(value, min_v, max_v):
+            if value is None:
+                return 0
+            value = max(min_v, min(value, max_v))
+            if max_v == min_v:
+                return 0
+            return (value - min_v) / (max_v - min_v) * 100
+
+        def bar_color(p):
+            if p < 25:
+                return "warning"   # yellow
+            elif p < 75:
+                return "success"   # green
+            return "danger"        # red
+
+        p1 = pct(cost_predictive, 0, 100)
+        p2 = pct(cost_reactive, 0, 10000)
+        p3 = pct(early_penalty, 0, 10)
+        p4 = pct(late_penalty, 0, 100)
+        p5 = pct(lead_time, 0, 365)
+        p6 = pct(cost_weight, 0, 10)
+
+        return (
+            p1, bar_color(p1),
+            p2, bar_color(p2),
+            p3, bar_color(p3),
+            p4, bar_color(p4),
+            p5, bar_color(p5),
+            p6, bar_color(p6),
+        )
+
+
+    @app.callback(
+        Output("wizard-outer-k-fold-progress", "value"),
+        Output("wizard-outer-k-fold-progress", "color"),
+        Output("wizard-inner-k-fold-progress", "value"),
+        Output("wizard-inner-k-fold-progress", "color"),
+        Output("wizard-trials-progress", "value"),
+        Output("wizard-trials-progress", "color"),
+        Output("wizard-tuning-time-limit-progress", "value"),
+        Output("wizard-tuning-time-limit-progress", "color"),
+        Input("wizard-outer-k-fold", "value"),
+        Input("wizard-inner-k-fold", "value"),
+        Input("wizard-trials", "value"),
+        Input("wizard-tuning-time-limit", "value"),
+        prevent_initial_call=False,
+    )
+    def update_step3_progress(
+        outer_k_fold,
+        inner_k_fold,
+        trials,
+        tuning_time_limit,
+    ):
+        def pct(value, min_v, max_v):
+            if value is None:
+                return 0
+            value = max(min_v, min(value, max_v))
+            if max_v == min_v:
+                return 0
+            return (value - min_v) / (max_v - min_v) * 100
+
+        def bar_color(p):
+            if p < 25:
+                return "warning"
+            elif p < 75:
+                return "success"
+            return "danger"
+
+        p1 = pct(outer_k_fold, 2, 10)
+        p2 = pct(inner_k_fold, 2, 10)
+        p3 = pct(trials, 1, 256)
+        p4 = pct(tuning_time_limit, 1, 7200)
+
+        return (
+            p1, bar_color(p1),
+            p2, bar_color(p2),
+            p3, bar_color(p3),
+            p4, bar_color(p4),
+        )
+    
+

@@ -94,3 +94,80 @@ button:hover {
     width: 100%;
   }
 }
+
+
+
+
+/* ===== Cost sensitive ===== */
+
+/* ===== Cost sensitive switch ===== */
+
+.wizard-switch {
+    display: inline-block;
+    margin-bottom: 6px;
+}
+
+.wizard-switch label {
+    position: relative;
+    display: inline-block;
+    width: 110px;
+    height: 58px;
+    cursor: pointer;
+}
+
+.wizard-switch-input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.wizard-switch-label {
+    margin: 0;
+    padding: 0;
+}
+
+.wizard-switch-label::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: #E5E7EB;
+    border-radius: 999px;
+    transition: all 0.25s ease;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+    box-sizing: border-box;
+}
+
+.wizard-switch-label::after {
+    content: "";
+    position: absolute;
+    height: 46px;
+    width: 46px;
+    left: 6px;
+    top: 6px;
+    background: #FFFFFF;
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    transition: all 0.25s ease;
+    z-index: 2;
+}
+
+/* OFF icon */
+.wizard-switch label::before {
+    content: "";
+}
+
+.wizard-switch label span {
+    display: none;
+}
+
+/* ON state */
+.wizard-switch-input:checked + *::before,
+.wizard-switch label:has(.wizard-switch-input:checked)::before {
+    background: #4ADE80;
+}
+
+.wizard-switch-input:checked + *::after,
+.wizard-switch label:has(.wizard-switch-input:checked)::after {
+    transform: translateX(52px);
+}

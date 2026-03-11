@@ -18,9 +18,8 @@ from pages import (
 
 from pages.benchmark import DATA_ROWS, OUT_ROWS
 
-# External stylesheets (including Font Awesome CDN)
 external_stylesheets = [
-    dbc.themes.BOOTSTRAP,
+    dbc.themes.LUX,
     "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css",
 ]
 
