@@ -27,9 +27,9 @@ MODAL_OVERLAY_VISIBLE = {
 }
 
 MODAL_CONTENT_STYLE = {
-    "width": "900px",
+    "width": "min(900px, 95vw)",
     "maxWidth": "95vw",
-    "height": "760px",
+    "height": "min(760px, 90vh)",
     "maxHeight": "90vh",
     "backgroundColor": "white",
     "borderRadius": "16px",
@@ -54,6 +54,7 @@ NAV_BTN_ROW_STYLE = {
     "alignItems": "center",
     "marginTop": "24px",
     "flexShrink": 0,
+    "gap": "12px",
 }
 
 STEP_CONTENT_STYLE = {
@@ -73,7 +74,7 @@ WIZARD_BODY_SCROLL_STYLE = {
 
 FIELDS_2COL_STYLE = {
     "display": "grid",
-    "gridTemplateColumns": "1fr 1fr",
+    "gridTemplateColumns": "repeat(2, minmax(0, 1fr))",
     "gap": "20px 24px",
     "alignItems": "start",
 }
@@ -258,15 +259,10 @@ DEFAULT_TRAINING_CONFIG = {
 def _summary_row(label, value):
     return html.Div(
         [
-            html.Div(label, style={"fontWeight": 600, "minWidth": "220px"}),
-            html.Div(str(value if value is not None else "-")),
+            html.Div(label, className="wizard-summary-label"),
+            html.Div(str(value if value is not None else "-"), className="wizard-summary-value"),
         ],
-        style={
-            "display": "flex",
-            "gap": "12px",
-            "padding": "8px 0",
-            "borderBottom": "1px solid #E5E7EB",
-        },
+        className="wizard-summary-row",
     )
 
 
@@ -274,6 +270,7 @@ def _compact_number_row(
     unit_text,
     input_id,
     param_name,
+    param_abr="abr",
     *,
     value=None,
     min_value=0,
@@ -281,8 +278,9 @@ def _compact_number_row(
     step=1,
     disabled=False,
     input_style=None,
-    unit_width="110px",
-    class_name="mb-0",
+    unit_width="60px",
+    abr_width="70px",
+    class_name="compact-number-input-progress-bar",
     persistence=True,
 ):
     return html.Div(
@@ -293,11 +291,13 @@ def _compact_number_row(
                         [
                             dbc.InputGroupText(
                                 unit_text,
+                                className="wizard-input-addon wizard-input-addon-left",
                                 style={
                                     "minWidth": unit_width,
                                     "justifyContent": "center",
                                     "borderBottom": "0",
                                     "borderBottomLeftRadius": "12px",
+                                    "backgroundColor": "transparent",
                                 },
                             ),
                             dbc.Input(
@@ -312,6 +312,7 @@ def _compact_number_row(
                                 persistence=persistence,
                                 persistence_type="session",
                                 debounce=False,
+                                className="wizard-number-input",
                                 style={
                                     "flex": "1",
                                     "borderBottom": "0",
@@ -319,11 +320,23 @@ def _compact_number_row(
                                     "boxShadow": "none",
                                     "outline": "none",
                                     "backgroundColor": "transparent",
+                                    "borderColor": "transparent",
                                     "backgroundClip": "padding-box",
                                     **(input_style or {}),
-                                }
+                                },
+                            ),
+                            dbc.InputGroupText(
+                                param_abr,
+                                className="wizard-input-addon wizard-input-addon-right",
+                                style={
+                                    "minWidth": abr_width,
+                                    "justifyContent": "center",
+                                    "borderBottom": "0",
+                                    "backgroundColor": "transparent",
+                                },
                             ),
                         ],
+                        className="wizard-input-group",
                         style={"width": "100%"},
                     ),
                     dbc.Progress(
@@ -431,6 +444,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                             "T",
                             "wizard-slice-window",
                             "Length of slice window",
+                            param_abr="L_w",
                             value=form_data.get("slice_window"),
                             min_value=1,
                             max_value=100,
@@ -455,6 +469,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                             )
                         ),
                     ],
+                    className="wizard-grid-2",
                     style=FIELDS_2COL_STYLE,
                 ),
             ],
@@ -477,11 +492,6 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
             }
 
         section_style = {"marginTop": "0", "color": "#9CA3AF"} if manual_disabled else {"marginTop": "0"}
-
-        column_style = {
-            "flex": "1 1 0",
-            "minWidth": "0",
-        }
 
         body = html.Div(
             [
@@ -520,6 +530,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "$",
                                     "wizard-cost-predictive",
                                     "Predictive maintenance cost",
+                                    param_abr="C_pr",
                                     value=form_data.get("cost_predictive"),
                                     min_value=0,
                                     max_value=100,
@@ -531,6 +542,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "$",
                                     "wizard-cost-reactive",
                                     "Reactive maintenance cost",
+                                    param_abr="C_re",
                                     value=form_data.get("cost_reactive"),
                                     min_value=0,
                                     max_value=10000,
@@ -542,6 +554,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "$/T",
                                     "wizard-early-penalty",
                                     "Early maintenance penalty",
+                                    param_abr="α",
                                     value=form_data.get("early_penalty"),
                                     min_value=0,
                                     max_value=10,
@@ -553,6 +566,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "$/T",
                                     "wizard-late-penalty",
                                     "Late maintenance penalty",
+                                    param_abr="β",
                                     value=form_data.get("late_penalty"),
                                     min_value=0,
                                     max_value=100,
@@ -561,7 +575,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     input_style=input_style,
                                 ),
                             ],
-                            style=column_style,
+                            className="wizard-two-col-item",
                         ),
                         html.Div(
                             [
@@ -574,6 +588,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "day",
                                     "wizard-lead-time",
                                     "Lead time",
+                                    param_abr="LT",
                                     value=form_data.get("lead_time"),
                                     min_value=0,
                                     max_value=365,
@@ -585,6 +600,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "w",
                                     "wizard-cost-weight",
                                     "Importance weight",
+                                    param_abr="w",
                                     value=form_data.get("cost_weight"),
                                     min_value=0,
                                     max_value=10,
@@ -593,25 +609,16 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     input_style=input_style,
                                 ),
                             ],
-                            style=column_style,
+                            className="wizard-two-col-item",
                         ),
                     ],
-                    style={
-                        "display": "flex",
-                        "gap": "36px",
-                        "alignItems": "flex-start",
-                    },
+                    className="wizard-two-col",
                 ),
             ],
             style=STEP_CONTENT_STYLE,
         )
 
     elif step == 3:
-        column_style = {
-            "flex": "1 1 0",
-            "minWidth": "0",
-        }
-
         body = html.Div(
             [
                 html.H4("Training setup"),
@@ -625,6 +632,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "K",
                                     "wizard-outer-k-fold",
                                     "#Outer K-fold CV",
+                                    param_abr="K_out",
                                     value=form_data.get("outer_k_fold"),
                                     min_value=2,
                                     max_value=10,
@@ -634,13 +642,14 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "K",
                                     "wizard-inner-k-fold",
                                     "#Inner K-fold",
+                                    param_abr="K_in",
                                     value=form_data.get("inner_k_fold"),
                                     min_value=2,
                                     max_value=10,
                                     step=1,
                                 ),
                             ],
-                            style=column_style,
+                            className="wizard-two-col-item",
                         ),
                         html.Div(
                             [
@@ -649,6 +658,7 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "n",
                                     "wizard-trials",
                                     "# Number of trials",
+                                    param_abr="N_trials",
                                     value=form_data.get("trials", settings.get("trials", 4)),
                                     min_value=1,
                                     max_value=256,
@@ -658,20 +668,17 @@ def render_training_step(step: int, settings: dict, form_data: dict, validation_
                                     "Sec.",
                                     "wizard-tuning-time-limit",
                                     "Tuning time limit",
+                                    param_abr="T_limit",
                                     value=form_data.get("tuning_time_limit"),
                                     min_value=1,
                                     max_value=7200,
                                     step=60,
                                 ),
                             ],
-                            style=column_style,
+                            className="wizard-two-col-item",
                         ),
                     ],
-                    style={
-                        "display": "flex",
-                        "gap": "36px",
-                        "alignItems": "flex-start",
-                    },
+                    className="wizard-two-col",
                 ),
             ],
             style=STEP_CONTENT_STYLE,
@@ -799,15 +806,17 @@ def build_training_wizard():
                 [
                     html.Div(
                         [
-                            html.H2("New model training"),
-                            html.Button("✕", id="btn-close-wizard", n_clicks=0),
+                            html.H2("New model training", className="wizard-title"),
+                            html.Button("✕", id="btn-close-wizard", n_clicks=0, className="wizard-close-btn"),
                         ],
+                        className="wizard-header",
                         style={
                             "display": "flex",
                             "justifyContent": "space-between",
                             "alignItems": "center",
                             "marginBottom": "12px",
                             "flexShrink": 0,
+                            "gap": "12px",
                         },
                     ),
                     html.Div(
@@ -816,22 +825,26 @@ def build_training_wizard():
                     ),
                     html.Div(
                         [
-                            html.Button("Back", id="btn-wizard-back", n_clicks=0),
+                            html.Button("Back", id="btn-wizard-back", n_clicks=0, className="wizard-nav-btn"),
                             html.Div(
                                 [
-                                    html.Button("Next", id="btn-wizard-next", n_clicks=0),
+                                    html.Button("Next", id="btn-wizard-next", n_clicks=0, className="wizard-nav-btn"),
                                     html.Button(
                                         "Start training",
                                         id="btn-wizard-finish",
                                         n_clicks=0,
+                                        className="wizard-nav-btn wizard-nav-btn-primary",
                                         style={"marginLeft": "8px"},
                                     ),
                                 ],
+                                className="wizard-nav-actions",
                             ),
                         ],
+                        className="wizard-nav-row",
                         style=NAV_BTN_ROW_STYLE,
                     ),
                 ],
+                className="wizard-modal-content",
                 style=MODAL_CONTENT_STYLE,
             )
         ],
@@ -1163,7 +1176,6 @@ def register_training_wizard_callbacks(
             color = "danger"
 
         return p, color
-    
 
     @app.callback(
         Output("wizard-cost-predictive-progress", "value"),
@@ -1204,10 +1216,10 @@ def register_training_wizard_callbacks(
 
         def bar_color(p):
             if p < 25:
-                return "warning"   # yellow
+                return "warning"
             elif p < 75:
-                return "success"   # green
-            return "danger"        # red
+                return "success"
+            return "danger"
 
         p1 = pct(cost_predictive, 0, 100)
         p2 = pct(cost_reactive, 0, 10000)
@@ -1224,7 +1236,6 @@ def register_training_wizard_callbacks(
             p5, bar_color(p5),
             p6, bar_color(p6),
         )
-
 
     @app.callback(
         Output("wizard-outer-k-fold-progress", "value"),
@@ -1273,5 +1284,3 @@ def register_training_wizard_callbacks(
             p3, bar_color(p3),
             p4, bar_color(p4),
         )
-    
-

@@ -258,7 +258,7 @@ def _param_slider(label, slider_id, min_v, max_v, step, value):
             ),
             dcc.Slider(
                 id=slider_id,
-                className="slider-green",
+                className="rc-slider slider-green",
                 min=min_v,
                 max=max_v,
                 step=step,
@@ -446,7 +446,7 @@ def register_callbacks(app):
             _summary_row("Downtime pen. (β)", f"€{BETA:,.0f}/day"),
             _summary_row("Failure time", f"{RUL_TRUE:g}"),
             _summary_row("Leadtime", f"{LEADTIME:g}"),
-        ]
+        ]  
 
         return (
             fig1,

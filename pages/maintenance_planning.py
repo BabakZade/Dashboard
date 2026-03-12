@@ -1124,6 +1124,7 @@ def layout():
 
             dcc.Loading(
                 type="default",
+                color = "#00a174",
                 children=[
                     html.Div(id="mp-status", style={"marginBottom": "10px"}),
                     html.Div(id="mp-obj", style={"fontWeight": 600, "marginBottom": "12px"}),

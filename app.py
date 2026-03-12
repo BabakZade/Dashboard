@@ -34,12 +34,12 @@ app.title = "Cost-sensitive predictive maintenance"
 
 ROUTES = {
     "/": ("Home", home.layout),
-    "/cost-function": ("Page 1 — Cost function", cost_function.layout),
-    "/data-simulator": ("Page 2 — Data Simulator", data_simulator.layout),
-    "/rul-distribution": ("Page 3 — RUL distribution", rul_distribution.layout),
-    "/cost-sensitive-model": ("Page 4 — Cost sensitive model", cost_sensitive_model.layout),
-    "/maintenance-planning": ("Page 5 — Maintenance planning", maintenance_planning.layout),
-    "/benchmark": ("Page 6 — Benchmark", benchmark.layout),
+    "/cost-function": ("Cost function", cost_function.layout),
+    "/data-simulator": ("Data Simulator", data_simulator.layout),
+    "/rul-distribution": ("RUL distribution", rul_distribution.layout),
+    "/cost-sensitive-model": ("Cost sensitive model", cost_sensitive_model.layout),
+    "/maintenance-planning": ("Maintenance planning", maintenance_planning.layout),
+    "/benchmark": ("Benchmark", benchmark.layout),
 }
 
 ICONS = {
@@ -250,5 +250,5 @@ app.validation_layout = html.Div(
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8050))
-    #app.run(debug=False, host="0.0.0.0", port=port)
+    #app.run(debug=True, use_reloader=False, host="0.0.0.0", port=port)
     app.run_server(debug=False, host="0.0.0.0", port=port)
