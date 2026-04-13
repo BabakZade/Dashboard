@@ -849,7 +849,7 @@ def register_callbacks(app):
         trig = ctx.triggered_id
 
         if trig == "btn-select-model":
-            if not dropdown_value:
+            if not dropdown_value: 
                 raise PreventUpdate
 
             chosen_name = dropdown_value
@@ -994,7 +994,6 @@ def register_callbacks(app):
 
     register_training_wizard_callbacks(
         app,
-        settings_slug=settings_slug,
         train_new_model=train_new_model,
         MODELS_DIR=MODELS_DIR,
         VISIBLE_CARD_STYLE=VISIBLE_CARD_STYLE,

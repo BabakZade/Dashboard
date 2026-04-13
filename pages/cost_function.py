@@ -1,6 +1,7 @@
-# pages/cost_function.py
 from dash import dcc, html, Input, Output, State
+import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
+import plotly.io as pio
 import numpy as np
 
 X_MIN, X_MAX = 0, 30
@@ -18,9 +19,8 @@ DEFAULTS = {
     "BETA": 500,
 }
 
-import plotly.io as pio
-
 pio.templates.default = "plotly_white"
+
 
 def clamp(x, lo=X_MIN, hi=X_MAX):
     return max(lo, min(hi, x))
@@ -51,7 +51,7 @@ def nonlinear_cost(rul_pred: float, rul_true: float, leadtime: float, C_PR: floa
     if rul_pred <= rul_true:
         return C_PR + ALPHA * (rul_true - rul_pred) ** 2
     eff = float(np.minimum(rul_pred - rul_true, leadtime))
-    return C_RE + BETA * (eff**2)
+    return C_RE + BETA * (eff ** 2)
 
 
 def timeline_figure(rul_pred: float, rul_true: float, leadtime: float, C_PR: float, ALPHA: float, C_RE: float, BETA: float):
@@ -192,8 +192,20 @@ def part2_both_costs_fig(rul_pred: float, rul_true: float, leadtime: float, C_PR
     fig.add_vline(x=rul_true + leadtime, line_dash="dot")
 
     col_sel = regime_color(rul_pred, rul_true, leadtime)
-    fig.add_trace(go.Scatter(x=[rul_pred], y=[linear_cost(rul_pred, rul_true, leadtime, C_PR, ALPHA, C_RE, BETA)], mode="markers", marker=dict(size=10, color=col_sel), showlegend=False))
-    fig.add_trace(go.Scatter(x=[rul_pred], y=[nonlinear_cost(rul_pred, rul_true, leadtime, C_PR, ALPHA, C_RE, BETA)], mode="markers", marker=dict(size=10, color=col_sel), showlegend=False))
+    fig.add_trace(go.Scatter(
+        x=[rul_pred],
+        y=[linear_cost(rul_pred, rul_true, leadtime, C_PR, ALPHA, C_RE, BETA)],
+        mode="markers",
+        marker=dict(size=10, color=col_sel),
+        showlegend=False
+    ))
+    fig.add_trace(go.Scatter(
+        x=[rul_pred],
+        y=[nonlinear_cost(rul_pred, rul_true, leadtime, C_PR, ALPHA, C_RE, BETA)],
+        mode="markers",
+        marker=dict(size=10, color=col_sel),
+        showlegend=False
+    ))
 
     fig.update_layout(
         autosize=True,
@@ -206,59 +218,47 @@ def part2_both_costs_fig(rul_pred: float, rul_true: float, leadtime: float, C_PR
     )
     return fig
 
-def slider_block_inline():
-    return html.Div(
-        style={
-            # your existing styles
-            "border": "1px solid #ddd",
-            "borderRadius": "14px",
-            "padding": "12px",
-            "background": "white",
-            "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
 
-            # NEW: make it stick while scrolling
+def slider_block_inline():
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.Div("Maintenance time", className="fw-bold mb-2"),
+                dcc.Slider(
+                    id="rul_pred_cost",
+                    className="slider-green",
+                    min=X_MIN,
+                    max=X_MAX,
+                    step=0.5,
+                    value=DEFAULTS["RUL_TRUE"],
+                    tooltip={"placement": "bottom", "always_visible": False},
+                    marks=None,
+                ),
+            ]
+        ),
+        className="shadow-sm",
+        style={
             "position": "sticky",
-            "top": "70px",   # <-- set this to your header height (+ a little gap)
-            "zIndex": 2000,
+            "top": "70px",
+            "zIndex": 1000,
         },
-        children=[
-            html.Div("Maintenance time", style={"fontWeight": 900, "marginBottom": "6px"}),
-            dcc.Slider(
-                id="rul_pred_cost",
-                className="slider-green",
-                min=X_MIN,
-                max=X_MAX,
-                step=0.5,
-                value=DEFAULTS["RUL_TRUE"],
-                tooltip={"placement": "bottom", "always_visible": False},
-                marks=None,
-            ),
-        ],
     )
 
 
 def _param_slider(label, slider_id, min_v, max_v, step, value):
     return html.Div(
-        style={
-            "padding": "10px 0",
-            "borderBottom": "1px solid #f1f1f1",
-        },
+        className="py-2 border-bottom",
         children=[
-            html.Div(
-                style={
-                    "display": "flex",
-                    "justifyContent": "space-between",
-                    "alignItems": "center",
-                    "marginBottom": "6px",
-                },
-                children=[
-                    html.Div(label, style={"fontSize": "13px", "fontWeight": 900}),
-                    html.Div(id=f"{slider_id}_value", style={"fontSize": "13px", "fontWeight": 950}),
+            dbc.Row(
+                [
+                    dbc.Col(html.Div(label, className="small fw-bold"), width=8),
+                    dbc.Col(html.Div(id=f"{slider_id}_value", className="small fw-bold text-end"), width=4),
                 ],
+                className="align-items-center mb-2",
             ),
             dcc.Slider(
                 id=slider_id,
-                className= "slider-green",
+                className="rc-slider slider-green",
                 min=min_v,
                 max=max_v,
                 step=step,
@@ -271,151 +271,120 @@ def _param_slider(label, slider_id, min_v, max_v, step, value):
 
 
 def _summary_row(left, right):
-    return html.Div(
-        style={
-            "display": "grid",
-            "gridTemplateColumns": "1fr auto",
-            "gap": "10px",
-            "padding": "8px 0",
-            "borderTop": "1px solid #f3f3f3",
-        },
-        children=[
-            html.Div(left, style={"fontSize": "12px", "fontWeight": 800, "color": "#333"}),
-            html.Div(right, style={"fontSize": "12px", "fontWeight": 950, "whiteSpace": "nowrap"}),
+    return dbc.Row(
+        [
+            dbc.Col(html.Div(left, className="small fw-bold text-muted"), width=7),
+            dbc.Col(html.Div(right, className="small fw-bold text-end"), width=5),
         ],
+        className="py-2 border-top align-items-center g-2",
     )
 
 
 def assumptions_side_panel():
-    return html.Div(
-        style={
-            "background": "white",
-            "border": "1px solid #eee",
-            "borderRadius": "14px",
-            "padding": "14px",
-            "boxShadow": "0 10px 26px rgba(0,0,0,0.06)",
-        },
-        children=[
-
-            # ===== HEADER =====
-            html.Div(
-                style={
-                    "display": "flex",
-                    "alignItems": "center",
-                    "justifyContent": "space-between",
-                    "marginBottom": "8px",
-                },
-                children=[
-                    html.Div("Assumptions", style={"fontSize": "15px", "fontWeight": 950}),
-                    html.Div(
-                        "Context",
-                        style={
-                            "fontSize": "12px",
-                            "fontWeight": 900,
-                            "padding": "4px 10px",
-                            "borderRadius": "999px",
-                            "background": "#f5f7ff",
-                            "border": "1px solid #e6e9ff",
-                        },
-                    ),
-                ],
-            ),
-
-            # ===== SHORT EXPLANATION =====
-            html.Div(
-                "These parameters define the maintenance cost structure. "
-                "Adjust them to see how early vs late decisions affect total cost.",
-                style={
-                    "fontSize": "12px",
-                    "color": "#555",
-                    "lineHeight": "1.6",
-                    "marginBottom": "12px",
-                },
-            ),
-
-            # ===== SUMMARY SECTION (TOP) =====
-            html.Div(
-                "Current configuration",
-                style={"fontSize": "13px", "fontWeight": 900, "marginBottom": "6px"},
-            ),
-
-            html.Div(id="p1_assumptions_rows"),
-
-            html.Hr(style={"margin": "14px 0"}),
-
-            # ===== SLIDERS SECTION =====
-            html.Div(
-                "Adjust parameters",
-                style={"fontSize": "13px", "fontWeight": 900, "marginBottom": "6px"},
-            ),
-
-            html.Div(
-                "Move sliders to explore different economic scenarios.",
-                style={
-                    "fontSize": "12px",
-                    "color": "#666",
-                    "marginBottom": "10px",
-                },
-            ),
-
-            _param_slider("Preventive cost (Cₚ)", "p1_C_PR", 0, 20000, 100, DEFAULTS["C_PR"]),
-            _param_slider("Reactive cost (Cᵣ)", "p1_C_RE", 0, 50000, 500, DEFAULTS["C_RE"]),
-            _param_slider("Early penalty (α) €/day", "p1_ALPHA", 0, 1000, 10, DEFAULTS["ALPHA"]),
-            _param_slider("Downtime penalty (β) €/day", "p1_BETA", 0, 5000, 50, DEFAULTS["BETA"]),
-            _param_slider("Failure time", "p1_RUL_TRUE", X_MIN, X_MAX, 1, DEFAULTS["RUL_TRUE"]),
-            _param_slider("Leadtime", "p1_LEADTIME", 0, X_MAX, 1, DEFAULTS["LEADTIME"]),
-        ],
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                dbc.Row(
+                    [
+                        dbc.Col(html.Div("Assumptions", className="fw-bold"), width="auto"),
+                        dbc.Col(
+                            html.Span("Context", className="badge rounded-pill text-bg-light border"),
+                            width="auto",
+                            className="ms-auto",
+                        ),
+                    ],
+                    className="align-items-center mb-2",
+                ),
+                html.Div(
+                    "These parameters define the maintenance cost structure. "
+                    "Adjust them to see how early vs late decisions affect total cost.",
+                    className="small text-muted mb-3",
+                ),
+                html.Div("Current configuration", className="fw-bold small mb-2"),
+                html.Div(id="p1_assumptions_rows"),
+                html.Hr(className="my-3"),
+                html.Div("Adjust parameters", className="fw-bold small mb-2"),
+                html.Div(
+                    "Move sliders to explore different economic scenarios.",
+                    className="small text-muted mb-3",
+                ),
+                _param_slider("Preventive cost (Cₚ)", "p1_C_PR", 0, 20000, 100, DEFAULTS["C_PR"]),
+                _param_slider("Reactive cost (Cᵣ)", "p1_C_RE", 0, 50000, 500, DEFAULTS["C_RE"]),
+                _param_slider("Early penalty (α) €/day", "p1_ALPHA", 0, 1000, 10, DEFAULTS["ALPHA"]),
+                _param_slider("Downtime penalty (β) €/day", "p1_BETA", 0, 5000, 50, DEFAULTS["BETA"]),
+                _param_slider("Failure time", "p1_RUL_TRUE", X_MIN, X_MAX, 1, DEFAULTS["RUL_TRUE"]),
+                _param_slider("Leadtime", "p1_LEADTIME", 0, X_MAX, 1, DEFAULTS["LEADTIME"]),
+            ]
+        ),
+        className="shadow-sm",
     )
 
 
-
-
 def decision_block():
-    return html.Div(
-        style={"border": "1px solid #ddd", "borderRadius": "14px", "padding": "12px"},
-        children=[
-            html.H4("Decision & cost", style={"marginTop": 0}),
-            html.Div(id="cost_note", style={"marginTop": "10px", "fontSize": "16px"}),
-            dcc.Graph(id="timeline", config={"displayModeBar": False, "responsive": True}),
-            html.Div(id="cost_value", style={"marginTop": "6px", "fontSize": "20px", "fontWeight": 950}),
-        ],
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H4("Decision & cost", className="mb-3"),
+                html.Div(id="cost_note", className="mb-3"),
+                dcc.Graph(id="timeline", config={"displayModeBar": False, "responsive": True}),
+                html.Div(id="cost_value", className="mt-2 fs-5 fw-bold"),
+            ]
+        ),
+        className="shadow-sm",
     )
 
 
 def curves_block():
-    return html.Div(
-        style={"border": "1px solid #ddd", "borderRadius": "14px", "padding": "12px", "marginTop": "12px"},
-        children=[
-            html.H4("Cost curves", style={"marginTop": 0}),
-            html.Div(
-                [
-                    html.Div([dcc.Graph(id="cost_lin_parts_fig", config={"displayModeBar": False, "responsive": True})], style={"flex": 1, "minWidth": 0}),
-                    html.Div([dcc.Graph(id="cost_nonlin_parts_fig", config={"displayModeBar": False, "responsive": True})], style={"flex": 1, "minWidth": 0}),
-                ],
-                style={"display": "flex", "gap": "10px", "marginBottom": "10px"},
-            ),
-            dcc.Graph(id="cost_both_fig", config={"displayModeBar": False, "responsive": True}),
-        ],
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H4("Cost curves", className="mb-3"),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dcc.Graph(id="cost_lin_parts_fig", config={"displayModeBar": False, "responsive": True}),
+                            md=6,
+                            xs=12,
+                        ),
+                        dbc.Col(
+                            dcc.Graph(id="cost_nonlin_parts_fig", config={"displayModeBar": False, "responsive": True}),
+                            md=6,
+                            xs=12,
+                        ),
+                    ],
+                    className="g-3 mb-2",
+                ),
+                dcc.Graph(id="cost_both_fig", config={"displayModeBar": False, "responsive": True}),
+            ]
+        ),
+        className="shadow-sm mt-3",
     )
 
 
 def layout():
-    return html.Div(
-        className="p1-grid",
+    return dbc.Container(
+        fluid=True,
         children=[
-            html.Div(
-                className="p1-main",
-                children=[
-                    slider_block_inline(),
-                    html.Div(style={"height": "12px"}),
-                    decision_block(),
-                    curves_block(),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            slider_block_inline(),
+                            html.Div(className="my-3"),
+                            decision_block(),
+                            curves_block(),
+                        ],
+                        lg=8,
+                        xs=12,
+                    ),
+                    dbc.Col(
+                        assumptions_side_panel(),
+                        lg=4,
+                        xs=12,
+                    ),
                 ],
-            ),
-            html.Div(
-                className="p1-side",
-                children=[assumptions_side_panel()],
-            ),
+                className="g-3",
+            )
         ],
     )
 
@@ -477,7 +446,7 @@ def register_callbacks(app):
             _summary_row("Downtime pen. (β)", f"€{BETA:,.0f}/day"),
             _summary_row("Failure time", f"{RUL_TRUE:g}"),
             _summary_row("Leadtime", f"{LEADTIME:g}"),
-        ]
+        ]  
 
         return (
             fig1,

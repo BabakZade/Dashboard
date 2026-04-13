@@ -1,4 +1,4 @@
-from dash import html, dcc, ctx
+from dash import html, dcc, ctx, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from pathlib import Path
@@ -6,7 +6,11 @@ from copy import deepcopy
 import uuid
 import yaml
 import dash_bootstrap_components as dbc
+import os, sys;
 
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 MODAL_OVERLAY_HIDDEN = {
     "display": "none",
@@ -27,9 +31,9 @@ MODAL_OVERLAY_VISIBLE = {
 }
 
 MODAL_CONTENT_STYLE = {
-    "width": "900px",
+    "width": "min(900px, 95vw)",
     "maxWidth": "95vw",
-    "height": "760px",
+    "height": "min(760px, 90vh)",
     "maxHeight": "90vh",
     "backgroundColor": "white",
     "borderRadius": "16px",
@@ -54,6 +58,7 @@ NAV_BTN_ROW_STYLE = {
     "alignItems": "center",
     "marginTop": "24px",
     "flexShrink": 0,
+    "gap": "12px",
 }
 
 STEP_CONTENT_STYLE = {
@@ -73,7 +78,7 @@ WIZARD_BODY_SCROLL_STYLE = {
 
 FIELDS_2COL_STYLE = {
     "display": "grid",
-    "gridTemplateColumns": "1fr 1fr",
+    "gridTemplateColumns": "repeat(2, minmax(0, 1fr))",
     "gap": "20px 24px",
     "alignItems": "start",
 }
@@ -258,15 +263,10 @@ DEFAULT_TRAINING_CONFIG = {
 def _summary_row(label, value):
     return html.Div(
         [
-            html.Div(label, style={"fontWeight": 600, "minWidth": "220px"}),
-            html.Div(str(value if value is not None else "-")),
+            html.Div(label, className="wizard-summary-label"),
+            html.Div(str(value if value is not None else "-"), className="wizard-summary-value"),
         ],
-        style={
-            "display": "flex",
-            "gap": "12px",
-            "padding": "8px 0",
-            "borderBottom": "1px solid #E5E7EB",
-        },
+        className="wizard-summary-row",
     )
 
 
@@ -274,6 +274,7 @@ def _compact_number_row(
     unit_text,
     input_id,
     param_name,
+    param_abr="abr",
     *,
     value=None,
     min_value=0,
@@ -281,8 +282,9 @@ def _compact_number_row(
     step=1,
     disabled=False,
     input_style=None,
-    unit_width="110px",
-    class_name="mb-0",
+    unit_width="60px",
+    abr_width="70px",
+    class_name="compact-number-input-progress-bar",
     persistence=True,
 ):
     return html.Div(
@@ -293,11 +295,13 @@ def _compact_number_row(
                         [
                             dbc.InputGroupText(
                                 unit_text,
+                                className="wizard-input-addon wizard-input-addon-left",
                                 style={
                                     "minWidth": unit_width,
                                     "justifyContent": "center",
                                     "borderBottom": "0",
                                     "borderBottomLeftRadius": "12px",
+                                    "backgroundColor": "transparent",
                                 },
                             ),
                             dbc.Input(
@@ -312,6 +316,7 @@ def _compact_number_row(
                                 persistence=persistence,
                                 persistence_type="session",
                                 debounce=False,
+                                className="wizard-number-input",
                                 style={
                                     "flex": "1",
                                     "borderBottom": "0",
@@ -319,11 +324,23 @@ def _compact_number_row(
                                     "boxShadow": "none",
                                     "outline": "none",
                                     "backgroundColor": "transparent",
+                                    "borderColor": "transparent",
                                     "backgroundClip": "padding-box",
                                     **(input_style or {}),
-                                }
+                                },
+                            ),
+                            dbc.InputGroupText(
+                                param_abr,
+                                className="wizard-input-addon wizard-input-addon-right",
+                                style={
+                                    "minWidth": abr_width,
+                                    "justifyContent": "center",
+                                    "borderBottom": "0",
+                                    "backgroundColor": "transparent",
+                                },
                             ),
                         ],
+                        className="wizard-input-group",
                         style={"width": "100%"},
                     ),
                     dbc.Progress(
@@ -357,11 +374,7 @@ def _compact_number_row(
     )
 
 
-def _compact_dropdown_row(
-    dropdown_component,
-    *,
-    class_name="mb-0",
-):
+def _compact_dropdown_row(dropdown_component, *, class_name="mb-0"):
     return html.Div(
         dropdown_component,
         className=class_name,
@@ -369,7 +382,27 @@ def _compact_dropdown_row(
     )
 
 
-def build_training_config(form_data: dict, save_dir: Path, experiment_name: str) -> dict:
+def _step_container(step_number, active_step, title, body):
+    is_visible = (active_step or 1) == step_number
+    return html.Div(
+        [
+            html.Div(f"Step {step_number} of 5", style=STEP_BADGE_STYLE),
+            html.H3(title),
+            body,
+        ],
+        style={"display": "block"} if is_visible else {"display": "none"},
+    )
+
+
+from datetime import datetime
+
+def settings_slug(s):
+    dataset_name = s.get("dataset", "dataset")
+    timestamp = datetime.now().strftime("%m%d_%H_config.yaml")
+    return f"{dataset_name}_{timestamp}"
+
+
+def build_training_config(form_data: dict, experiment_name: str) -> dict:
     config = deepcopy(DEFAULT_TRAINING_CONFIG)
     form_data = form_data or {}
 
@@ -378,7 +411,7 @@ def build_training_config(form_data: dict, save_dir: Path, experiment_name: str)
 
     config["experiment"]["name"] = experiment_name
     config["experiment"]["readme"] = f"Wizard-generated config for dataset {selected_dataset}"
-    config["paths"]["experiment_dir"] = str(save_dir)
+    #config["paths"]["experiment_dir"] = str(save_dir)
     config["selected_dataset"] = selected_dataset
 
     config["problem"]["slice_window"] = form_data.get("slice_window") or config["problem"]["slice_window"]
@@ -401,391 +434,370 @@ def build_training_config(form_data: dict, save_dir: Path, experiment_name: str)
 
 
 def write_training_config(config: dict, save_dir: Path) -> Path:
-    save_dir.mkdir(parents=True, exist_ok=True)
-    config_path = save_dir / "config.yaml"
-    with open(config_path, "w", encoding="utf-8") as f:
+    save_dir.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_dir, "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
-    return config_path
+    return save_dir
 
 
-def render_training_step(step: int, settings: dict, form_data: dict, validation_csv: str):
-    titles = {
-        1: "Data manipulation",
-        2: "Cost function",
-        3: "Training setup",
-        4: "Dataset",
-        5: "Preview",
-    }
-
+def render_training_steps(active_step: int, settings: dict, form_data: dict, validation_csv: str):
     settings = settings or {}
     form_data = form_data or {}
 
-    if step == 1:
-        body = html.Div(
-            [
-                html.H4("Data time-slice settings"),
-                html.P("Define how the time window is sliced and represented for model input."),
-                html.Div(
-                    [
-                        _compact_number_row(
-                            "T",
-                            "wizard-slice-window",
-                            "Length of slice window",
-                            value=form_data.get("slice_window"),
-                            min_value=1,
-                            max_value=100,
-                            step=1,
-                        ),
-                        _compact_dropdown_row(
-                            dcc.Dropdown(
-                                id="wizard-slicer-output",
-                                options=[
-                                    {"label": "Choose slicer output", "value": 0},
-                                    {"label": "Flatten all time-window features", "value": 1},
-                                    {"label": "Average of each feature over the time window", "value": 2},
-                                    {"label": "Standard deviation of each feature over the time window", "value": 3},
-                                    {"label": "Average and standard deviation per feature", "value": 4},
-                                    {"label": "Flattened features plus summary statistics", "value": 5},
-                                ],
-                                value=form_data.get("slicer_output"),
-                                clearable=True,
-                                placeholder="Choose slicer output",
-                                persistence=True,
-                                persistence_type="session",
-                            )
-                        ),
-                    ],
-                    style=FIELDS_2COL_STYLE,
-                ),
-            ],
-            style=STEP_CONTENT_STYLE,
-        )
+    instance_dependent = form_data.get(
+        "instance_dependent_cost",
+        settings.get("instance_dependent_cost", False),
+    )
+    manual_disabled = bool(instance_dependent)
 
-    elif step == 2:
-        instance_dependent = form_data.get(
-            "instance_dependent_cost",
-            settings.get("instance_dependent_cost", False),
-        )
-        manual_disabled = bool(instance_dependent)
-
-        input_style = {}
-        if manual_disabled:
-            input_style = {
-                "backgroundColor": "#F3F4F6",
-                "color": "#9CA3AF",
-                "cursor": "not-allowed",
-            }
-
-        section_style = {"marginTop": "0", "color": "#9CA3AF"} if manual_disabled else {"marginTop": "0"}
-
-        column_style = {
-            "flex": "1 1 0",
-            "minWidth": "0",
+    input_style = {}
+    if manual_disabled:
+        input_style = {
+            "backgroundColor": "#F3F4F6",
+            "color": "#9CA3AF",
+            "cursor": "not-allowed",
         }
 
-        body = html.Div(
-            [
-                html.H4("Cost function"),
-                html.P("Define maintenance costs and fleet-related settings."),
-                html.Label("Cost setting mode"),
-                html.Div(
-                    [
-                        dbc.Switch(
-                            id="wizard-instance-dependent-cost",
-                            value=bool(instance_dependent),
-                            label="Instance-dependent cost-sensitive",
-                            className="mb-2",
-                        ),
-                    ],
-                    style={"marginBottom": "10px"},
-                ),
-                html.Div(
-                    "If selected, the data should include: weight, leadtime, reactive_cost, predictive_cost, downtime_cost, rul_cost.",
-                    style={
-                        "fontSize": "13px",
-                        "color": "#6B7280",
-                        "marginBottom": "18px",
-                    },
-                ),
-                html.Div(
-                    [
-                        html.Div(
-                            [
-                                html.H5(
-                                    "Maintenance cost",
-                                    id="title-maintenance-cost",
-                                    style=section_style,
-                                ),
-                                _compact_number_row(
-                                    "$",
-                                    "wizard-cost-predictive",
-                                    "Predictive maintenance cost",
-                                    value=form_data.get("cost_predictive"),
-                                    min_value=0,
-                                    max_value=100,
-                                    step=10,
-                                    disabled=manual_disabled,
-                                    input_style=input_style,
-                                ),
-                                _compact_number_row(
-                                    "$",
-                                    "wizard-cost-reactive",
-                                    "Reactive maintenance cost",
-                                    value=form_data.get("cost_reactive"),
-                                    min_value=0,
-                                    max_value=10000,
-                                    step=100,
-                                    disabled=manual_disabled,
-                                    input_style=input_style,
-                                ),
-                                _compact_number_row(
-                                    "$/T",
-                                    "wizard-early-penalty",
-                                    "Early maintenance penalty",
-                                    value=form_data.get("early_penalty"),
-                                    min_value=0,
-                                    max_value=10,
-                                    step=1,
-                                    disabled=manual_disabled,
-                                    input_style=input_style,
-                                ),
-                                _compact_number_row(
-                                    "$/T",
-                                    "wizard-late-penalty",
-                                    "Late maintenance penalty",
-                                    value=form_data.get("late_penalty"),
-                                    min_value=0,
-                                    max_value=100,
-                                    step=10,
-                                    disabled=manual_disabled,
-                                    input_style=input_style,
-                                ),
-                            ],
-                            style=column_style,
-                        ),
-                        html.Div(
-                            [
-                                html.H5(
-                                    "Fleet characteristics",
-                                    id="title-fleet-characteristics",
-                                    style=section_style,
-                                ),
-                                _compact_number_row(
-                                    "day",
-                                    "wizard-lead-time",
-                                    "Lead time",
-                                    value=form_data.get("lead_time"),
-                                    min_value=0,
-                                    max_value=365,
-                                    step=7,
-                                    disabled=manual_disabled,
-                                    input_style=input_style,
-                                ),
-                                _compact_number_row(
-                                    "w",
-                                    "wizard-cost-weight",
-                                    "Importance weight",
-                                    value=form_data.get("cost_weight"),
-                                    min_value=0,
-                                    max_value=10,
-                                    step=1,
-                                    disabled=manual_disabled,
-                                    input_style=input_style,
-                                ),
-                            ],
-                            style=column_style,
-                        ),
-                    ],
-                    style={
-                        "display": "flex",
-                        "gap": "36px",
-                        "alignItems": "flex-start",
-                    },
-                ),
-            ],
-            style=STEP_CONTENT_STYLE,
-        )
+    section_style = {"marginTop": "0", "color": "#9CA3AF"} if manual_disabled else {"marginTop": "0"}
 
-    elif step == 3:
-        column_style = {
-            "flex": "1 1 0",
-            "minWidth": "0",
-        }
-
-        body = html.Div(
-            [
-                html.H4("Training setup"),
-                html.P("Define cross-validation and hyperparameter tuning settings."),
-                html.Div(
-                    [
-                        html.Div(
-                            [
-                                html.H5("Cross-validation settings", style={"marginTop": "0", "marginBottom": "16px"}),
-                                _compact_number_row(
-                                    "K",
-                                    "wizard-outer-k-fold",
-                                    "#Outer K-fold CV",
-                                    value=form_data.get("outer_k_fold"),
-                                    min_value=2,
-                                    max_value=10,
-                                    step=1,
-                                ),
-                                _compact_number_row(
-                                    "K",
-                                    "wizard-inner-k-fold",
-                                    "#Inner K-fold",
-                                    value=form_data.get("inner_k_fold"),
-                                    min_value=2,
-                                    max_value=10,
-                                    step=1,
-                                ),
-                            ],
-                            style=column_style,
-                        ),
-                        html.Div(
-                            [
-                                html.H5("Hyperparameter tuning settings", style={"marginTop": "0", "marginBottom": "16px"}),
-                                _compact_number_row(
-                                    "n",
-                                    "wizard-trials",
-                                    "# Number of trials",
-                                    value=form_data.get("trials", settings.get("trials", 4)),
-                                    min_value=1,
-                                    max_value=256,
-                                    step=8,
-                                ),
-                                _compact_number_row(
-                                    "Sec.",
-                                    "wizard-tuning-time-limit",
-                                    "Tuning time limit",
-                                    value=form_data.get("tuning_time_limit"),
-                                    min_value=1,
-                                    max_value=7200,
-                                    step=60,
-                                ),
-                            ],
-                            style=column_style,
-                        ),
-                    ],
-                    style={
-                        "display": "flex",
-                        "gap": "36px",
-                        "alignItems": "flex-start",
-                    },
-                ),
-            ],
-            style=STEP_CONTENT_STYLE,
-        )
-
-    elif step == 4:
-        body = html.Div(
-            [
-                html.H4("Dataset"),
-                html.P("Select the dataset to use for training."),
-                _compact_dropdown_row(
-                    dcc.Dropdown(
-                        id="wizard-dataset",
-                        options=[
-                            {"label": "Choose Dataset", "value": "choose_dataset"},
-                            {"label": "ncmpss", "value": "ncmpss"},
-                            {"label": "btry", "value": "btry"},
-                            {"label": "phm2008", "value": "phm2008"},
-                            {"label": "cmapss", "value": "cmapss"},
-                            {"label": "phm", "value": "phm"},
-                        ],
-                        value=form_data.get("dataset"),
-                        clearable=True,
-                        placeholder="Choose dataset",
-                        persistence=True,
-                        persistence_type="session",
-                    )
-                ),
-            ],
-            style=STEP_CONTENT_STYLE,
-        )
-
-    elif step == 5:
-        effective = dict(settings)
-        effective.update(form_data or {})
-
-        slicer_output_map = {
-            0: "Choose slicer output",
-            1: "Flatten all time-window features",
-            2: "Average of each feature over the time window",
-            3: "Standard deviation of each feature over the time window",
-            4: "Average and standard deviation per feature",
-            5: "Flattened features plus summary statistics",
-        }
-
-        dataset_map = {
-            "choose_dataset": "Choose dataset",
-            "ncmpss": "ncmpss",
-            "btry": "btry",
-            "phm2008": "phm2008",
-            "cmapss": "cmapss",
-            "phm": "phm",
-        }
-
-        preview_rows = [
-            html.H4("Preview"),
-            html.P("Review all settings before starting training."),
-            html.H5("Data manipulation", style={"marginTop": "16px"}),
-            _summary_row("Slice window", effective.get("slice_window")),
-            _summary_row(
-                "Time-window representation",
-                slicer_output_map.get(effective.get("slicer_output"), effective.get("slicer_output")),
-            ),
-            html.H5("Cost function", style={"marginTop": "20px"}),
-            _summary_row(
-                "Cost setting mode",
-                "Instance-dependent cost-sensitive" if effective.get("instance_dependent_cost") else "Standard",
-            ),
-        ]
-
-        if not effective.get("instance_dependent_cost"):
-            preview_rows.extend(
+    step_1_body = html.Div(
+        [
+            html.H4("Data time-slice settings"),
+            html.P("Define how the time window is sliced and represented for model input."),
+            html.Div(
                 [
-                    _summary_row("Predictive maintenance cost", effective.get("cost_predictive")),
-                    _summary_row("Reactive maintenance cost", effective.get("cost_reactive")),
-                    _summary_row("Early maintenance penalty", effective.get("early_penalty")),
-                    _summary_row("Late maintenance penalty", effective.get("late_penalty")),
-                    _summary_row("Lead time", effective.get("lead_time")),
-                    _summary_row("Importance weight", effective.get("cost_weight")),
-                ]
-            )
-        else:
-            preview_rows.append(
-                html.Div(
-                    "Manual cost and lead-time fields are ignored because instance-dependent cost-sensitive mode is selected.",
-                    style={
-                        "padding": "10px 0",
-                        "color": "#6B7280",
-                    },
-                )
-            )
+                    _compact_number_row(
+                        "T",
+                        "wizard-slice-window",
+                        "Length of slice window",
+                        param_abr="L_w",
+                        value=form_data.get("slice_window"),
+                        min_value=1,
+                        max_value=100,
+                        step=1,
+                    ),
+                    _compact_dropdown_row(
+                        dcc.Dropdown(
+                            id="wizard-slicer-output",
+                            options=[
+                                {"label": "Choose slicer output", "value": 0},
+                                {"label": "Flatten all time-window features", "value": 1},
+                                {"label": "Average of each feature over the time window", "value": 2},
+                                {"label": "Standard deviation of each feature over the time window", "value": 3},
+                                {"label": "Average and standard deviation per feature", "value": 4},
+                                {"label": "Flattened features plus summary statistics", "value": 5},
+                            ],
+                            value=form_data.get("slicer_output"),
+                            clearable=True,
+                            placeholder="Choose slicer output",
+                            persistence=True,
+                            persistence_type="session",
+                        )
+                    ),
+                ],
+                className="wizard-grid-2",
+                style=FIELDS_2COL_STYLE,
+            ),
+        ],
+        style=STEP_CONTENT_STYLE,
+    )
 
+    step_2_body = html.Div(
+        [
+            html.H4("Cost function"),
+            html.P("Define maintenance costs and fleet-related settings."),
+            html.Label("Cost setting mode"),
+            html.Div(
+                [
+                    dbc.Switch(
+                        id="wizard-instance-dependent-cost",
+                        value=bool(instance_dependent),
+                        label="Instance-dependent cost-sensitive",
+                        className="mb-2",
+                    ),
+                ],
+                style={"marginBottom": "10px"},
+            ),
+            html.Div(
+                "If selected, the data should include: weight, leadtime, reactive_cost, predictive_cost, downtime_cost, rul_cost.",
+                style={
+                    "fontSize": "13px",
+                    "color": "#6B7280",
+                    "marginBottom": "18px",
+                },
+            ),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.H5(
+                                "Maintenance cost",
+                                id="title-maintenance-cost",
+                                style=section_style,
+                            ),
+                            _compact_number_row(
+                                "$",
+                                "wizard-cost-predictive",
+                                "Predictive maintenance cost",
+                                param_abr="C_pr",
+                                value=form_data.get("cost_predictive"),
+                                min_value=0,
+                                max_value=100,
+                                step=10,
+                                disabled=manual_disabled,
+                                input_style=input_style,
+                            ),
+                            _compact_number_row(
+                                "$",
+                                "wizard-cost-reactive",
+                                "Reactive maintenance cost",
+                                param_abr="C_re",
+                                value=form_data.get("cost_reactive"),
+                                min_value=0,
+                                max_value=10000,
+                                step=100,
+                                disabled=manual_disabled,
+                                input_style=input_style,
+                            ),
+                            _compact_number_row(
+                                "$/T",
+                                "wizard-early-penalty",
+                                "Early maintenance penalty",
+                                param_abr="α",
+                                value=form_data.get("early_penalty"),
+                                min_value=0,
+                                max_value=10,
+                                step=1,
+                                disabled=manual_disabled,
+                                input_style=input_style,
+                            ),
+                            _compact_number_row(
+                                "$/T",
+                                "wizard-late-penalty",
+                                "Late maintenance penalty",
+                                param_abr="β",
+                                value=form_data.get("late_penalty"),
+                                min_value=0,
+                                max_value=100,
+                                step=10,
+                                disabled=manual_disabled,
+                                input_style=input_style,
+                            ),
+                        ],
+                        className="wizard-two-col-item",
+                    ),
+                    html.Div(
+                        [
+                            html.H5(
+                                "Fleet characteristics",
+                                id="title-fleet-characteristics",
+                                style=section_style,
+                            ),
+                            _compact_number_row(
+                                "day",
+                                "wizard-lead-time",
+                                "Lead time",
+                                param_abr="LT",
+                                value=form_data.get("lead_time"),
+                                min_value=0,
+                                max_value=365,
+                                step=7,
+                                disabled=manual_disabled,
+                                input_style=input_style,
+                            ),
+                            _compact_number_row(
+                                "w",
+                                "wizard-cost-weight",
+                                "Importance weight",
+                                param_abr="w",
+                                value=form_data.get("cost_weight"),
+                                min_value=0,
+                                max_value=10,
+                                step=1,
+                                disabled=manual_disabled,
+                                input_style=input_style,
+                            ),
+                        ],
+                        className="wizard-two-col-item",
+                    ),
+                ],
+                className="wizard-two-col",
+            ),
+        ],
+        style=STEP_CONTENT_STYLE,
+    )
+
+    step_3_body = html.Div(
+        [
+            html.H4("Training setup"),
+            html.P("Define cross-validation and hyperparameter tuning settings."),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.H5("Cross-validation settings", style={"marginTop": "0", "marginBottom": "16px"}),
+                            _compact_number_row(
+                                "K",
+                                "wizard-outer-k-fold",
+                                "#Outer K-fold CV",
+                                param_abr="K_out",
+                                value=form_data.get("outer_k_fold"),
+                                min_value=2,
+                                max_value=10,
+                                step=1,
+                            ),
+                            _compact_number_row(
+                                "K",
+                                "wizard-inner-k-fold",
+                                "#Inner K-fold",
+                                param_abr="K_in",
+                                value=form_data.get("inner_k_fold"),
+                                min_value=2,
+                                max_value=10,
+                                step=1,
+                            ),
+                        ],
+                        className="wizard-two-col-item",
+                    ),
+                    html.Div(
+                        [
+                            html.H5("Hyperparameter tuning settings", style={"marginTop": "0", "marginBottom": "16px"}),
+                            _compact_number_row(
+                                "n",
+                                "wizard-trials",
+                                "# Number of trials",
+                                param_abr="N_trials",
+                                value=form_data.get("trials", settings.get("trials", 4)),
+                                min_value=1,
+                                max_value=256,
+                                step=8,
+                            ),
+                            _compact_number_row(
+                                "Sec.",
+                                "wizard-tuning-time-limit",
+                                "Tuning time limit",
+                                param_abr="T_limit",
+                                value=form_data.get("tuning_time_limit"),
+                                min_value=1,
+                                max_value=7200,
+                                step=60,
+                            ),
+                        ],
+                        className="wizard-two-col-item",
+                    ),
+                ],
+                className="wizard-two-col",
+            ),
+        ],
+        style=STEP_CONTENT_STYLE,
+    )
+
+    step_4_body = html.Div(
+        [
+            html.H4("Dataset"),
+            html.P("Select the dataset to use for training."),
+            _compact_dropdown_row(
+                dcc.Dropdown(
+                    id="wizard-dataset",
+                    options=[
+                        {"label": "Choose Dataset", "value": "choose_dataset"},
+                        {"label": "ncmpss", "value": "ncmpss"},
+                        {"label": "btry", "value": "btry"},
+                        {"label": "phm2008", "value": "phm2008"},
+                        {"label": "cmapss", "value": "cmapss"},
+                        {"label": "phm", "value": "phm"},
+                    ],
+                    value=form_data.get("dataset"),
+                    clearable=True,
+                    placeholder="Choose dataset",
+                    persistence=True,
+                    persistence_type="session",
+                )
+            ),
+        ],
+        style=STEP_CONTENT_STYLE,
+    )
+
+    slicer_output_map = {
+        0: "Choose slicer output",
+        1: "Flatten all time-window features",
+        2: "Average of each feature over the time window",
+        3: "Standard deviation of each feature over the time window",
+        4: "Average and standard deviation per feature",
+        5: "Flattened features plus summary statistics",
+    }
+
+    dataset_map = {
+        "choose_dataset": "Choose dataset",
+        "ncmpss": "ncmpss",
+        "btry": "btry",
+        "phm2008": "phm2008",
+        "cmapss": "cmapss",
+        "phm": "phm",
+    }
+
+    effective = dict(settings)
+    effective.update(form_data or {})
+
+    preview_rows = [
+        html.H4("Preview"),
+        html.P("Review all settings before starting training."),
+        html.H5("Data manipulation", style={"marginTop": "16px"}),
+        _summary_row("Slice window", effective.get("slice_window")),
+        _summary_row(
+            "Time-window representation",
+            slicer_output_map.get(effective.get("slicer_output"), effective.get("slicer_output")),
+        ),
+        html.H5("Cost function", style={"marginTop": "20px"}),
+        _summary_row(
+            "Cost setting mode",
+            "Instance-dependent cost-sensitive" if effective.get("instance_dependent_cost") else "Standard",
+        ),
+    ]
+
+    if not effective.get("instance_dependent_cost"):
         preview_rows.extend(
             [
-                html.H5("Training setup", style={"marginTop": "20px"}),
-                _summary_row("Outer K-fold", effective.get("outer_k_fold")),
-                _summary_row("Inner K-fold", effective.get("inner_k_fold")),
-                _summary_row("Number of trials", effective.get("trials")),
-                _summary_row("Tuning time limit (seconds)", effective.get("tuning_time_limit")),
-                html.H5("Dataset", style={"marginTop": "20px"}),
-                _summary_row("Dataset", dataset_map.get(effective.get("dataset"), effective.get("dataset"))),
+                _summary_row("Predictive maintenance cost", effective.get("cost_predictive")),
+                _summary_row("Reactive maintenance cost", effective.get("cost_reactive")),
+                _summary_row("Early maintenance penalty", effective.get("early_penalty")),
+                _summary_row("Late maintenance penalty", effective.get("late_penalty")),
+                _summary_row("Lead time", effective.get("lead_time")),
+                _summary_row("Importance weight", effective.get("cost_weight")),
             ]
         )
-
-        body = html.Div(preview_rows, style=STEP_CONTENT_STYLE)
-
     else:
-        body = html.Div("Unknown step", style=STEP_CONTENT_STYLE)
+        preview_rows.append(
+            html.Div(
+                "Manual cost and lead-time fields are ignored because instance-dependent cost-sensitive mode is selected.",
+                style={
+                    "padding": "10px 0",
+                    "color": "#6B7280",
+                },
+            )
+        )
+
+    preview_rows.extend(
+        [
+            html.H5("Training setup", style={"marginTop": "20px"}),
+            _summary_row("Outer K-fold", effective.get("outer_k_fold")),
+            _summary_row("Inner K-fold", effective.get("inner_k_fold")),
+            _summary_row("Number of trials", effective.get("trials")),
+            _summary_row("Tuning time limit (seconds)", effective.get("tuning_time_limit")),
+            html.H5("Dataset", style={"marginTop": "20px"}),
+            _summary_row("Dataset", dataset_map.get(effective.get("dataset"), effective.get("dataset"))),
+        ]
+    )
+
+    step_5_body = html.Div(preview_rows, style=STEP_CONTENT_STYLE)
 
     return html.Div(
         [
-            html.Div(f"Step {step} of 5", style=STEP_BADGE_STYLE),
-            html.H3(titles.get(step, "Wizard")),
-            body,
+            _step_container(1, active_step, "Data manipulation", step_1_body),
+            _step_container(2, active_step, "Cost function", step_2_body),
+            _step_container(3, active_step, "Training setup", step_3_body),
+            _step_container(4, active_step, "Dataset", step_4_body),
+            _step_container(5, active_step, "Preview", step_5_body),
         ]
     )
 
@@ -799,15 +811,17 @@ def build_training_wizard():
                 [
                     html.Div(
                         [
-                            html.H2("New model training"),
-                            html.Button("✕", id="btn-close-wizard", n_clicks=0),
+                            html.H2("New model training", className="wizard-title"),
+                            html.Button("✕", id="btn-close-wizard", n_clicks=0, className="wizard-close-btn"),
                         ],
+                        className="wizard-header",
                         style={
                             "display": "flex",
                             "justifyContent": "space-between",
                             "alignItems": "center",
                             "marginBottom": "12px",
                             "flexShrink": 0,
+                            "gap": "12px",
                         },
                     ),
                     html.Div(
@@ -816,22 +830,26 @@ def build_training_wizard():
                     ),
                     html.Div(
                         [
-                            html.Button("Back", id="btn-wizard-back", n_clicks=0),
+                            html.Button("Back", id="btn-wizard-back", n_clicks=0, className="wizard-nav-btn"),
                             html.Div(
                                 [
-                                    html.Button("Next", id="btn-wizard-next", n_clicks=0),
+                                    html.Button("Next", id="btn-wizard-next", n_clicks=0, className="wizard-nav-btn"),
                                     html.Button(
                                         "Start training",
                                         id="btn-wizard-finish",
                                         n_clicks=0,
+                                        className="wizard-nav-btn wizard-nav-btn-primary",
                                         style={"marginLeft": "8px"},
                                     ),
                                 ],
+                                className="wizard-nav-actions",
                             ),
                         ],
+                        className="wizard-nav-row",
                         style=NAV_BTN_ROW_STYLE,
                     ),
                 ],
+                className="wizard-modal-content",
                 style=MODAL_CONTENT_STYLE,
             )
         ],
@@ -841,7 +859,6 @@ def build_training_wizard():
 def register_training_wizard_callbacks(
     app,
     *,
-    settings_slug,
     train_new_model,
     MODELS_DIR,
     VISIBLE_CARD_STYLE,
@@ -902,11 +919,11 @@ def register_training_wizard_callbacks(
         State("train-wizard-form-store", "data"),
     )
     def render_training_wizard_body(step, s, form_data):
-        return render_training_step(
-            step or 1,
-            s or settings_default,
-            form_data or {},
-            VALIDATION_CSV,
+        return render_training_steps(
+            active_step=step or 1,
+            settings=s or settings_default,
+            form_data=form_data or {},
+            validation_csv=VALIDATION_CSV,
         )
 
     @app.callback(
@@ -1059,14 +1076,12 @@ def register_training_wizard_callbacks(
                 if key in form_data and form_data[key] is not None:
                     s[key] = form_data[key]
 
-        assets_path = Path(MODELS_DIR)
+        assets_path = Path(project_root + "//assets")
         desired = settings_slug(s)
         desired_path = assets_path / desired
-        desired_path.mkdir(parents=True, exist_ok=True)
 
         config = build_training_config(
             form_data=form_data,
-            save_dir=desired_path,
             experiment_name=desired,
         )
         write_training_config(config=config, save_dir=desired_path)
@@ -1163,7 +1178,6 @@ def register_training_wizard_callbacks(
             color = "danger"
 
         return p, color
-    
 
     @app.callback(
         Output("wizard-cost-predictive-progress", "value"),
@@ -1204,10 +1218,10 @@ def register_training_wizard_callbacks(
 
         def bar_color(p):
             if p < 25:
-                return "warning"   # yellow
+                return "warning"
             elif p < 75:
-                return "success"   # green
-            return "danger"        # red
+                return "success"
+            return "danger"
 
         p1 = pct(cost_predictive, 0, 100)
         p2 = pct(cost_reactive, 0, 10000)
@@ -1224,7 +1238,6 @@ def register_training_wizard_callbacks(
             p5, bar_color(p5),
             p6, bar_color(p6),
         )
-
 
     @app.callback(
         Output("wizard-outer-k-fold-progress", "value"),
@@ -1273,5 +1286,3 @@ def register_training_wizard_callbacks(
             p3, bar_color(p3),
             p4, bar_color(p4),
         )
-    
-

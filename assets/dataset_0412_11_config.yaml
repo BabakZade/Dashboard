@@ -1,0 +1,154 @@
+experiment:
+  name: dataset_0412_11_config.yaml
+  readme: Wizard-generated config for dataset None
+  top_n_settings: 3
+  top_n_front: 3
+general:
+  precision: 4
+  k_in_tanh: 1
+  n_jobs: -1
+  welch_bins_keep: 10
+logging:
+  console_steps: true
+  console_info: true
+  console_errors: true
+  console_warnings: true
+  console_debuge: true
+  console_debuge_detail: true
+  debug_save: true
+  debug_dir: logs
+  debug_detail_custom_losses: false
+  level: DEBUG
+  console_level: INFO
+  file_level: DEBUG
+  log_to_file: true
+  log_filename: run.log
+  rotate_logs: true
+  max_log_size_mb: 10
+  backup_logs: 3
+  verbosity: true
+  save_model_diagnostic: true
+savecsv:
+  sep: ;
+  decimal: ','
+  index: false
+  header: true
+  encoding: utf-8
+  quoting: 0
+  float_format: '%.5f'
+model:
+  seed: 42
+  train_frac: 0.7
+  val_frac: 0.1
+  test_frac: 0.2
+  calibration_frac: 0.1
+  outer_k_fold: 3
+  inner_k_fold: 3
+  test_count_perID: 1
+  trials: 4
+  tuning_time_limit: 1800
+  primary_metric: prmc
+  secondary_metric: rmse
+  engine_id_overlap: false
+  label_window_overlap: true
+  top_n_features: 20
+  min_req_features: 4
+  max_req_features: 1000
+  CI_alpha: 0.1
+  f_engineer: true
+  integer_regularization: 0.01
+  upper_bound:
+    quantile: 0.995
+    regularization: 0.02
+  positive_prediction: true
+figure:
+  style: whitegrid
+  palette: viridis
+  dpi: 150
+  fontsize:
+    title: 14
+    axis_title: 12
+    tick: 9
+    legend: 9
+    annot: 7
+  save: true
+  format:
+  - png
+  - svg
+  bin: 30
+  focus: 2
+  id_grid: 15
+problem:
+  lead_time: 1
+  emrgency_response_time: 0
+  rul_thresh: 60
+  slice_window: 2
+  slice_shift: 2
+  cost_weight: 1.0
+  early_penalty: 1
+  late_penalty: 10
+  emergency_penalty: 10
+  cost_reactive: 200
+  cost_predictive: 20
+  normalize: true
+  slicer_output: 1
+  instance_dependent_cost_sensitive: false
+  rul_distribution:
+    error_dist: normal
+    sampling: 32
+    shape_param: 1.5
+    scale_param: 50
+cleaning:
+  distinct_thresh: 0
+  correlation_thresh: 0.98
+  correlation_minimum: 0.08
+  missing_col_thresh: 0.4
+  missing_row_thresh: 0.5
+  outlier_method: iqr
+  outlier_threshold: 3
+paths:
+  project_root: ''
+  models_src: outputs/
+  experiment_dir: ''
+  trained_models: trained_models/
+  model_analysis: model_analysis/
+  result_dir: results/
+  notebook_dir: notebooks/
+  scripts_dir: scripts/
+database:
+  cmapss:
+    raw: data/cmapss/
+    processed: data/cmapss/processed/
+    connection_string: postgresql://user:pass@localhost/db
+    query: SELECT * FROM cmapss_table
+  ncmpss:
+    raw: data/ncmpss/
+    processed: data/ncmpss/processed/
+    connection_string: postgresql://user:pass@localhost/db
+    query: SELECT * FROM ncmpss_table
+  phm:
+    raw: data/phm/
+    processed: data/phm/processed/
+    connection_string: postgresql://user:pass@localhost/db
+    query: SELECT * FROM cmapss_table
+  phm2008:
+    raw: data/phm2008/
+    processed: data/phm2008/processed/
+    connection_string: postgresql://user:pass@localhost/db
+    query: SELECT * FROM cmapss_table
+  ev:
+    raw: data/ev/raw/
+    processed: data/ev/processed/
+    connection_string: mysql://user:pass@localhost/ev
+    query: SELECT * FROM ev_table
+  btry:
+    raw: data/btry/
+    processed: data/btry/processed/
+    connection_string: mysql://user:pass@localhost/btry
+    query: SELECT * FROM ev_table
+  simulated_bpost:
+    raw: data/simulated_bpost/
+    processed: data/simulated_bpost/processed/
+    connection_string: mysql://user:pass@localhost/btry
+    query: SELECT * FROM ev_table
+selected_dataset: null
