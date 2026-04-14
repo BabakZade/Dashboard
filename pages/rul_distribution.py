@@ -418,16 +418,20 @@ def _compute_lifetime_costs(
 
     prev_idx = 0
     for fi in failure_indices:
-        ar_costs[fi] += c_reactive
         # Find whether a trigger fired in this window [prev_idx, fi]
         window_trigger = next(
             (i for i in range(prev_idx, fi + 1) if i in trigger_idx_set), None
         )
+        
+        prev_idx = fi + 1
+
         if window_trigger is not None:
             mg_costs[window_trigger] += c_predictive
+            
         else:
             mg_costs[fi] += c_reactive
-        prev_idx = fi + 1
+
+        ar_costs[fi] += c_reactive
 
     return t, np.cumsum(mg_costs), np.cumsum(ar_costs)
 
@@ -690,8 +694,8 @@ def layout():
                         ),
                         dcc.Slider(
                             id="lcost_lead_time",
-                            min=1, max=30, step=1, value=5,
-                            marks={1: "1", 10: "10", 20: "20", 30: "30"},
+                            min=1, max=90, step=1, value=25,
+                            marks={1: "1", 15: "15", 30: "30", 45: "45", 60: "60", 75: "75", 90: "90"},
                             tooltip={"placement": "bottom", "always_visible": True},
                         ),
                     ]),
