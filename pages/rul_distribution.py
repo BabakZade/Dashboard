@@ -219,18 +219,31 @@ def _prediction_figure(result: dict, failure_type: str) -> go.Figure:
 # =============================================================================
 
 def _find_trigger_indices_threshold(
-    result: dict, lead_time: float
+    result: dict, lead_time: float,
+    c_pred: float = 0.0, c_react: float = 0.0,
+    c_early: float = 0.0, c_downtime: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Threshold rule: trigger in window when ttf_50 first drops ≤ lead_time."""
+    """Threshold rule: trigger when ttf_50 first drops ≤ effective threshold.
+
+    When c_early > 0:
+        thr = lead_time + (c_react + c_downtime * lead_time - c_pred) / c_early
+    Falls back to plain lead_time when c_early == 0.
+    """
     ttf_50 = result["ttf_50"]
     fault_indicator = result["fault_indicator"].astype(bool)
     failure_indices = np.where(fault_indicator)[0]
+
+    if c_early > 0:
+        c_react_eff = c_react + c_downtime * lead_time
+        thr = lead_time + (c_react_eff - c_pred) / c_early
+    else:
+        thr = lead_time
 
     trigger_idxs, reactive_idxs = [], []
     prev_idx = 0
     for fi in failure_indices:
         window_ttf = ttf_50[prev_idx : fi + 1]
-        hits = np.where(window_ttf <= lead_time)[0]
+        hits = np.where(window_ttf <= thr)[0]
         if len(hits) > 0:
             trigger_idxs.append(prev_idx + int(hits[0]))
         else:
@@ -241,30 +254,38 @@ def _find_trigger_indices_threshold(
 
 
 def _find_trigger_indices_cost_optimal(
-    result: dict, c_predictive: float, c_reactive: float, lead_time: float
+    result: dict, c_predictive: float, c_reactive: float, lead_time: float,
+    c_early: float = 0.0, c_downtime: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Cost-optimal rule: trigger when P(fail within lead_time steps) ≥ C_pr / C_re.
+    """Cost-optimal rule with per-step effective cost ratio.
 
-    The probability threshold equals the cost ratio C_pr / C_re.  A large
-    reactive cost relative to predictive cost lowers the threshold, causing
-    earlier triggers.  Failure probability is computed from the product of
-    per-step survival probabilities (1 − prob_mean) over a look-ahead window
-    of length lead_time.
+    Effective predictive cost at step i:
+        c_pred_eff(i) = c_predictive + c_early * max(0, ttf_50[i] - lead_time)
+
+    Effective reactive cost (constant):
+        c_react_eff = c_reactive + c_downtime * lead_time
+
+    Trigger when p_fail >= c_pred_eff(i) / c_react_eff.
     """
     prob_mean = result["prob_mean"]
+    ttf_50    = result["ttf_50"]
     fault_indicator = result["fault_indicator"].astype(bool)
     failure_indices = np.where(fault_indicator)[0]
 
-    prob_threshold = min(c_predictive / max(c_reactive, 1e-9), 1.0)
+    c_react_eff = c_reactive + c_downtime * lead_time
 
     trigger_idxs, reactive_idxs = [], []
     prev_idx = 0
     for fi in failure_indices:
         triggered = False
         for i in range(prev_idx, fi + 1):
+            c_pred_eff = c_predictive + c_early * max(0.0, float(ttf_50[i]) - lead_time)
+            prob_threshold = min(c_pred_eff / max(c_react_eff, 1e-9), 1.0)
+
             horizon_end = min(i + int(lead_time), fi + 1)
             hazards = np.clip(prob_mean[i:horizon_end], 0.0, 1.0)
             p_fail = 1.0 - float(np.prod(1.0 - hazards))
+
             if p_fail >= prob_threshold:
                 trigger_idxs.append(i)
                 triggered = True
@@ -277,29 +298,36 @@ def _find_trigger_indices_cost_optimal(
 
 
 def _get_trigger_indices(
-    result: dict, lead_time: float, c_pred: float, c_react: float, rule: str
+    result: dict, lead_time: float, c_pred: float, c_react: float, rule: str,
+    c_early: float = 0.0, c_downtime: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Dispatch to the chosen trigger rule; returns (trigger_indices, reactive_indices)."""
     if rule == "cost_optimal":
-        return _find_trigger_indices_cost_optimal(result, c_pred, c_react, lead_time)
-    return _find_trigger_indices_threshold(result, lead_time)
+        return _find_trigger_indices_cost_optimal(
+            result, c_pred, c_react, lead_time, c_early, c_downtime
+        )
+    return _find_trigger_indices_threshold(
+        result, lead_time, c_pred, c_react, c_early, c_downtime
+    )
 
 
 def _optimal_maintenance_figure(
     result: dict, lead_time: float, c_pred: float, c_react: float,
     rule: str, failure_type: str,
+    c_early: float = 0.0, c_downtime: float = 0.0,
 ) -> go.Figure:
     """TTF (actual + predicted + CI) with optimal-maintenance trigger lines."""
     t = result["time"]
     ttf_true = result["ttf_true"]
     fault_times = t[result["fault_indicator"].astype(bool)]
-    trigger_idxs, reactive_idxs = _get_trigger_indices(result, lead_time, c_pred, c_react, rule)
+    trigger_idxs, reactive_idxs = _get_trigger_indices(
+        result, lead_time, c_pred, c_react, rule, c_early, c_downtime
+    )
     trigger_times = t[trigger_idxs] if len(trigger_idxs) > 0 else np.array([])
     reactive_times = t[reactive_idxs] if len(reactive_idxs) > 0 else np.array([])
 
     fig = go.Figure()
 
-    # ── 90 % CI band ─────────────────────────────────────────────────────────
     fig.add_trace(go.Scatter(
         x=np.concatenate([t, t[::-1]]),
         y=np.concatenate([result["ttf_95"], result["ttf_05"][::-1]]),
@@ -308,14 +336,12 @@ def _optimal_maintenance_figure(
         name="90 % CI",
     ))
 
-    # ── Predicted TTF (median) ────────────────────────────────────────────────
     fig.add_trace(go.Scatter(
         x=t, y=result["ttf_50"],
         mode="lines", name="Pred TTF (median)",
         line=dict(color="#636EFA", width=2),
     ))
 
-    # ── Actual TTF ───────────────────────────────────────────────────────────
     valid = np.isfinite(ttf_true)
     if valid.any():
         fig.add_trace(go.Scatter(
@@ -325,41 +351,47 @@ def _optimal_maintenance_figure(
         ))
 
     # ── Threshold / look-ahead annotation (horizontal) ────────────────────────
+    c_react_eff = c_react + c_downtime * lead_time
     if rule == "cost_optimal":
-        p_thr = min(c_pred / max(c_react, 1e-9), 1.0)
-        hline_label = f"Look-ahead H={lead_time}  │  p_thr={p_thr:.2f} (C_pr/C_re)"
+        p_thr_base = min(c_pred / max(c_react_eff, 1e-9), 1.0)
+        hline_label = (
+            f"Look-ahead H={lead_time}  │  "
+            f"base p_thr={p_thr_base:.2f}  (C_pr / (C_re + C_dt×H))"
+        )
+        hline_y = lead_time
     else:
-        hline_label = f"Lead time = {lead_time}"
+        if c_early > 0:
+            thr = lead_time + (c_react_eff - c_pred) / c_early
+            hline_label = f"Eff. threshold = {thr:.1f}  (lead_time + (C_re+C_dt×H−C_pr)/C_early)"
+            hline_y = thr
+        else:
+            hline_label = f"Lead time = {lead_time}"
+            hline_y = lead_time
+
     fig.add_hline(
-        y=lead_time,
+        y=hline_y,
         line_color="orange", line_dash="dash", line_width=1.5, opacity=0.75,
         annotation_text=hline_label,
         annotation_position="top right",
         annotation_font=dict(color="orange", size=11),
     )
 
-    # ── Observed failures (red dotted) ────────────────────────────────────────
     for ft in fault_times:
         fig.add_vline(
             x=ft, line_color="red", line_dash="dot",
             line_width=1.2, opacity=0.5,
         )
-
-    # ── Predictive maintenance triggers (green dashed) ────────────────────────
     for tt in trigger_times:
         fig.add_vline(
             x=tt, line_color="#00CC96", line_dash="dash",
             line_width=2, opacity=0.85,
         )
-
-    # ── Unforeseeable reactive events (orange dotted) ─────────────────────────
     for rt in reactive_times:
         fig.add_vline(
             x=rt, line_color="darkorange", line_dash="dot",
             line_width=2, opacity=0.85,
         )
 
-    # ── Legend proxies (add_vline has no legend support) ─────────────────────
     if len(trigger_times) > 0:
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode="lines",
@@ -399,39 +431,49 @@ def _compute_lifetime_costs(
     c_reactive: float,
     lead_time: float,
     rule: str,
+    c_early: float = 0.0,
+    c_downtime: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (time, cumulative_model_guided_cost, cumulative_always_reactive_cost).
 
-    Uses the selected trigger rule to determine when model-guided maintenance
-    fires; the always-reactive baseline pays c_reactive at every failure.
+    Model-guided per-trigger cost:
+        predictive trigger:  c_predictive + c_early * max(0, actual_gap - lead_time)
+        reactive failure:    c_reactive   + c_downtime * lead_time  (if lead_time > 0)
+
+    Always-reactive baseline per failure:
+        c_reactive + c_downtime * lead_time
     """
     t = result["time"]
     fault_indicator = result["fault_indicator"].astype(bool)
     n = len(t)
 
     failure_indices = np.where(fault_indicator)[0]
-    trigger_idxs, _ = _get_trigger_indices(result, lead_time, c_predictive, c_reactive, rule)
+    trigger_idxs, _ = _get_trigger_indices(
+        result, lead_time, c_predictive, c_reactive, rule, c_early, c_downtime
+    )
     trigger_idx_set = set(trigger_idxs.tolist())
+
+    c_react_eff = c_reactive + c_downtime * lead_time
 
     mg_costs = np.zeros(n)
     ar_costs = np.zeros(n)
 
     prev_idx = 0
     for fi in failure_indices:
-        # Find whether a trigger fired in this window [prev_idx, fi]
         window_trigger = next(
             (i for i in range(prev_idx, fi + 1) if i in trigger_idx_set), None
         )
-        
         prev_idx = fi + 1
 
-        if window_trigger is not None:
-            mg_costs[window_trigger] += c_predictive
-            
-        else:
-            mg_costs[fi] += c_reactive
+        # Always-reactive baseline always pays effective reactive cost
+        ar_costs[fi] += c_react_eff
 
-        ar_costs[fi] += c_reactive
+        if window_trigger is not None:
+            actual_gap = float(t[fi] - t[window_trigger])
+            excess_early = max(0.0, actual_gap - lead_time)
+            mg_costs[window_trigger] += c_predictive + c_early * excess_early
+        else:
+            mg_costs[fi] += c_react_eff
 
     return t, np.cumsum(mg_costs), np.cumsum(ar_costs)
 
@@ -443,9 +485,11 @@ def _lifetime_cost_figure(
     lead_time: float,
     rule: str,
     failure_type: str,
+    c_early: float = 0.0,
+    c_downtime: float = 0.0,
 ) -> go.Figure:
     t, cumcost_mg, cumcost_ar = _compute_lifetime_costs(
-        result, c_predictive, c_reactive, lead_time, rule
+        result, c_predictive, c_reactive, lead_time, rule, c_early, c_downtime
     )
     fault_times = t[result["fault_indicator"].astype(bool)]
     total_savings = float(cumcost_ar[-1] - cumcost_mg[-1]) if len(t) > 0 else 0.0
@@ -453,7 +497,6 @@ def _lifetime_cost_figure(
 
     fig = go.Figure()
 
-    # ── savings shading ──────────────────────────────────────────────────────
     fig.add_trace(go.Scatter(
         x=np.concatenate([t, t[::-1]]),
         y=np.concatenate([cumcost_ar, cumcost_mg[::-1]]),
@@ -464,7 +507,6 @@ def _lifetime_cost_figure(
         showlegend=True,
     ))
 
-    # ── always-reactive baseline ─────────────────────────────────────────────
     fig.add_trace(go.Scatter(
         x=t, y=cumcost_ar,
         mode="lines",
@@ -472,7 +514,6 @@ def _lifetime_cost_figure(
         line=dict(color="#EF553B", width=2.5),
     ))
 
-    # ── model-guided predictive ──────────────────────────────────────────────
     fig.add_trace(go.Scatter(
         x=t, y=cumcost_mg,
         mode="lines",
@@ -480,7 +521,6 @@ def _lifetime_cost_figure(
         line=dict(color="#00CC96", width=2.5),
     ))
 
-    # ── observed-failure markers ─────────────────────────────────────────────
     for ft in fault_times:
         fig.add_vline(
             x=ft, line_color="red", line_dash="dot",
@@ -689,13 +729,37 @@ def layout():
                     ]),
                     html.Div([
                         html.Label(
-                            "Lead time threshold",
+                            "Lead time threshold (H)",
                             style={"fontWeight": "600", "display": "block", "marginBottom": "6px"},
                         ),
                         dcc.Slider(
                             id="lcost_lead_time",
                             min=1, max=90, step=1, value=25,
                             marks={1: "1", 15: "15", 30: "30", 45: "45", 60: "60", 75: "75", 90: "90"},
+                            tooltip={"placement": "bottom", "always_visible": True},
+                        ),
+                    ]),
+                    html.Div([
+                        html.Label(
+                            "Early replacement penalty (C_early, per time unit beyond H)",
+                            style={"fontWeight": "600", "display": "block", "marginBottom": "6px"},
+                        ),
+                        dcc.Slider(
+                            id="lcost_c_early",
+                            min=0, max=50, step=1, value=0,
+                            marks={0: "0", 10: "10", 25: "25", 50: "50"},
+                            tooltip={"placement": "bottom", "always_visible": True},
+                        ),
+                    ]),
+                    html.Div([
+                        html.Label(
+                            "Downtime cost (C_dt, per time unit × H on reactive failure)",
+                            style={"fontWeight": "600", "display": "block", "marginBottom": "6px"},
+                        ),
+                        dcc.Slider(
+                            id="lcost_c_downtime",
+                            min=0, max=50, step=1, value=0,
+                            marks={0: "0", 10: "10", 25: "25", 50: "50"},
                             tooltip={"placement": "bottom", "always_visible": True},
                         ),
                     ]),
@@ -819,9 +883,15 @@ def register_callbacks(app):
         Input("lcost_c_react", "value"),
         Input("lcost_lead_time", "value"),
         Input("lcost_rule", "value"),
+        Input("lcost_c_early", "value"),
+        Input("lcost_c_downtime", "value"),
     )
     def update_lifetime_cost_plot(split, machine_id, failure_type,
-                                  c_pred, c_react, lead_time, rule):
+                                  c_pred, c_react, lead_time, rule,
+                                  c_early, c_downtime):
+        c_early    = c_early    or 0.0
+        c_downtime = c_downtime or 0.0
+
         def _empty(msg="Model not fitted — run scripts/fit_model.py first"):
             f = go.Figure()
             f.update_layout(
@@ -850,15 +920,16 @@ def register_callbacks(app):
             return go.Figure(), go.Figure(), "", ""
 
         schedule_fig = _optimal_maintenance_figure(
-            result, lead_time, c_pred, c_react, rule, failure_type
+            result, lead_time, c_pred, c_react, rule, failure_type,
+            c_early, c_downtime,
         )
 
         _t, cumcost_mg, cumcost_ar = _compute_lifetime_costs(
-            result, c_pred, c_react, lead_time, rule
+            result, c_pred, c_react, lead_time, rule, c_early, c_downtime
         )
-        total_ar  = float(cumcost_ar[-1]) if len(_t) > 0 else 0.0
-        total_mg  = float(cumcost_mg[-1]) if len(_t) > 0 else 0.0
-        savings   = total_ar - total_mg
+        total_ar    = float(cumcost_ar[-1]) if len(_t) > 0 else 0.0
+        total_mg    = float(cumcost_mg[-1]) if len(_t) > 0 else 0.0
+        savings     = total_ar - total_mg
         savings_pct = (savings / total_ar * 100) if total_ar > 0 else 0.0
 
         chip_style_base = {
@@ -878,23 +949,34 @@ def register_callbacks(app):
                       style={**chip_style_base, "background": "#e3f2fd", "color": "#0d47a1"}),
         ])
 
+        c_react_eff = c_react + c_downtime * lead_time
         if rule == "cost_optimal":
-            p_thr = min(c_pred / max(c_react, 1e-9), 1.0)
+            p_thr_base = min(c_pred / max(c_react_eff, 1e-9), 1.0)
             hint_text = (
-                f"ℹ️  Cost-optimal rule active — "
-                f"triggering when P(fail within next {lead_time} steps) ≥ "
-                f"{p_thr:.2f}  (= C_pr / C_re = {c_pred} / {c_react})"
+                f"ℹ️  Cost-optimal rule — per-step threshold = "
+                f"(C_pr + C_early × max(0, ttf₅₀ − H)) / (C_re + C_dt × H).  "
+                f"Base threshold (ttf₅₀ ≫ H): {p_thr_base:.2f}"
             )
         else:
-            hint_text = (
-                f"ℹ️  Threshold rule active — "
-                f"triggering when predicted median TTF ≤ {lead_time}"
-            )
+            if c_early > 0:
+                thr = lead_time + (c_react_eff - c_pred) / c_early
+                hint_text = (
+                    f"ℹ️  Threshold rule — effective threshold = {thr:.1f}  "
+                    f"(= H + (C_re + C_dt×H − C_pr) / C_early)"
+                )
+            else:
+                hint_text = (
+                    f"ℹ️  Threshold rule — triggering when predicted median TTF ≤ {lead_time}"
+                )
+
         rule_hint = html.Div(
             hint_text,
             style={"fontSize": "0.85em", "color": "#555", "fontStyle": "italic"},
         )
 
-        cost_fig = _lifetime_cost_figure(result, c_pred, c_react, lead_time, rule, failure_type)
+        cost_fig = _lifetime_cost_figure(
+            result, c_pred, c_react, lead_time, rule, failure_type,
+            c_early, c_downtime,
+        )
         return schedule_fig, cost_fig, summary, rule_hint
 

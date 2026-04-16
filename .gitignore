@@ -135,5 +135,6 @@ dash_cache/
 # If you have user uploads or generated assets, ignore them:
 assets/uploads/
 assets/generated/
+scripts/chronos-2-finetuned
 
 
