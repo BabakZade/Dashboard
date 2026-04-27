@@ -1,7 +1,11 @@
+import numpy as np
+
 sigma_obs_mean = 0.42 #np.mean(idata_exp.posterior["sigma_obs"].values.flatten())
 sigma_temp_mean = 4.5 #np.mean(idata_exp.posterior["sigma_temp"].values.flatten())
 sigma_vib_mean = 0.2575 #np.mean(idata_exp.posterior["sigma_vib"].values.flatten
 sigma_L_crit = 1.0
+min_a0, max_a0 = 0.012, 0.102
+min_a1, max_a1 = 0.0017, 0.0323
 
 def RUL_prediction_resample(t, L, vib, temp, t_predict):
     # np.random.seed(42)
