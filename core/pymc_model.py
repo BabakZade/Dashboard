@@ -6,8 +6,6 @@ At runtime the Dashboard only needs:
   - scikit-learn is NOT required – scalers are stored as plain npz arrays.
 """
 
-from __future__ import annotations
-
 import os
 from typing import Optional
 
