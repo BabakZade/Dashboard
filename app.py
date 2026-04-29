@@ -6,6 +6,11 @@ from collections import OrderedDict
 import numpy as np
 import pandas as pd
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 from dash import Dash, dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 
@@ -18,6 +23,24 @@ from pages import (
     benchmark,
     maintenance_planning,
 )
+
+# =============================================================================
+# Memory monitor
+# =============================================================================
+
+def print_memory(label=""):
+    """
+    Print current Python process memory.
+    Works locally and on Render if psutil is installed.
+    """
+    if psutil is None:
+        print(f"[MEMORY] {label}: psutil is not installed", flush=True)
+        return
+
+    process = psutil.Process(os.getpid())
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    print(f"[MEMORY] {label}: {mem_mb:.1f} MB", flush=True)
+
 
 # =============================================================================
 # App setup
@@ -41,11 +64,15 @@ app.title = "Cost-sensitive predictive maintenance"
 
 @server.route("/health")
 def health():
+    print_memory("health check")
     return "ok", 200
 
 
+print_memory("after imports and app creation")
+
+
 # =============================================================================
-# Memory guard for the heavy RUL distribution page
+# Memory guard for RUL distribution page
 # =============================================================================
 
 RUL_DF_CACHE_ITEMS = int(os.environ.get("RUL_DF_CACHE_ITEMS", "1"))
@@ -58,7 +85,7 @@ class BoundedCache(OrderedDict):
     Small LRU cache.
 
     This replaces the normal dictionaries inside pages/rul_distribution.py
-    without editing that file.
+    without changing that file on disk.
     """
 
     def __init__(self, max_items=1):
@@ -82,10 +109,9 @@ class BoundedCache(OrderedDict):
 
 def compact_rolling_payload(rolling):
     """
-    Reduce memory used by the rolling prediction dictionary.
+    Reduce memory used by rolling prediction output.
 
-    The biggest object is usually rul_samples_matrix, so this limits the
-    posterior samples and downcasts numeric arrays.
+    The largest object is usually rul_samples_matrix.
     """
     if not isinstance(rolling, dict):
         return rolling
@@ -126,57 +152,68 @@ def install_rul_distribution_memory_guards():
     """
     Patch the RUL distribution module from app.py.
 
-    This does not change pages/rul_distribution.py on disk.
+    This does not edit pages/rul_distribution.py.
     It only replaces its module-level caches at runtime.
     """
+    try:
+        # Limit dataframe cache.
+        if hasattr(rul_distribution, "_CACHE"):
+            old_cache = getattr(rul_distribution, "_CACHE")
 
-    # Limit dataset cache.
-    if hasattr(rul_distribution, "_CACHE"):
-        old_cache = getattr(rul_distribution, "_CACHE")
+            if not isinstance(old_cache, BoundedCache):
+                new_cache = BoundedCache(max_items=RUL_DF_CACHE_ITEMS)
 
-        if not isinstance(old_cache, BoundedCache):
-            new_cache = BoundedCache(max_items=RUL_DF_CACHE_ITEMS)
+                if isinstance(old_cache, dict):
+                    for key, value in old_cache.items():
+                        new_cache[key] = value
 
-            if isinstance(old_cache, dict):
-                for key, value in old_cache.items():
-                    new_cache[key] = value
+                rul_distribution._CACHE = new_cache
 
-            rul_distribution._CACHE = new_cache
+        # Limit rolling prediction cache.
+        if hasattr(rul_distribution, "_ROLLING_CACHE"):
+            old_cache = getattr(rul_distribution, "_ROLLING_CACHE")
 
-    # Limit rolling prediction cache.
-    if hasattr(rul_distribution, "_ROLLING_CACHE"):
-        old_cache = getattr(rul_distribution, "_ROLLING_CACHE")
+            if not isinstance(old_cache, BoundedCache):
+                new_cache = BoundedCache(max_items=RUL_ROLLING_CACHE_ITEMS)
 
-        if not isinstance(old_cache, BoundedCache):
-            new_cache = BoundedCache(max_items=RUL_ROLLING_CACHE_ITEMS)
+                if isinstance(old_cache, dict):
+                    for key, value in old_cache.items():
+                        new_cache[key] = compact_rolling_payload(value)
 
-            if isinstance(old_cache, dict):
-                for key, value in old_cache.items():
-                    new_cache[key] = compact_rolling_payload(value)
+                rul_distribution._ROLLING_CACHE = new_cache
 
-            rul_distribution._ROLLING_CACHE = new_cache
+        # Patch predict_machine_rolling so new rolling outputs are compacted
+        # before the page stores them.
+        if hasattr(rul_distribution, "predict_machine_rolling"):
+            if not getattr(rul_distribution, "_APP_MEMORY_PATCHED", False):
+                original_predict_machine_rolling = rul_distribution.predict_machine_rolling
 
-    # Patch predict_machine_rolling so any new rolling output is compacted
-    # before the page stores it.
-    if hasattr(rul_distribution, "predict_machine_rolling"):
-        if not getattr(rul_distribution, "_APP_MEMORY_PATCHED", False):
-            original_predict_machine_rolling = rul_distribution.predict_machine_rolling
+                def memory_safe_predict_machine_rolling(*args, **kwargs):
+                    print_memory("before predict_machine_rolling")
+                    rolling = original_predict_machine_rolling(*args, **kwargs)
+                    print_memory("after predict_machine_rolling before compact")
+                    rolling = compact_rolling_payload(rolling)
+                    print_memory("after compacting rolling payload")
+                    return rolling
 
-            def memory_safe_predict_machine_rolling(*args, **kwargs):
-                rolling = original_predict_machine_rolling(*args, **kwargs)
-                return compact_rolling_payload(rolling)
+                rul_distribution.predict_machine_rolling = memory_safe_predict_machine_rolling
+                rul_distribution._APP_MEMORY_PATCHED = True
 
-            rul_distribution.predict_machine_rolling = memory_safe_predict_machine_rolling
-            rul_distribution._APP_MEMORY_PATCHED = True
+        gc.collect()
 
-    gc.collect()
+    except Exception as e:
+        print(f"[MEMORY GUARD ERROR] {e}", flush=True)
 
 
 def clear_rul_distribution_memory(clear_dataset_cache=True):
     """
-    Clear heavy RUL distribution cache when leaving the page.
+    Clear heavy RUL distribution caches.
+
+    This helps when leaving the RUL page or when changing RUL inputs.
     """
     try:
+        print_memory("before clearing RUL cache")
+
         if hasattr(rul_distribution, "_ROLLING_CACHE"):
             rul_distribution._ROLLING_CACHE.clear()
 
@@ -184,12 +221,14 @@ def clear_rul_distribution_memory(clear_dataset_cache=True):
             rul_distribution._CACHE.clear()
 
         gc.collect()
+        print_memory("after clearing RUL cache")
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[RUL CACHE CLEAR ERROR] {e}", flush=True)
 
 
 install_rul_distribution_memory_guards()
+print_memory("after installing RUL memory guards")
 
 
 # =============================================================================
@@ -216,8 +255,11 @@ ICONS = {
     "/benchmark": "fa-solid fa-chart-pie",
 }
 
-DATA_ROWS = benchmark.DATA_ROWS
-OUT_ROWS = benchmark.OUT_ROWS
+# Important:
+# Do not put large benchmark data directly in app.layout.
+# Large dcc.Store data can make /_dash-layout huge and crash Render.
+BENCH_DATA_ROWS = []
+BENCH_OUT_ROWS = []
 
 
 # =============================================================================
@@ -263,16 +305,22 @@ def content_style():
 
 
 def serve_layout():
-    return dbc.Container(
+    print_memory("before serve_layout")
+
+    layout_obj = dbc.Container(
         fluid=True,
         className="px-0",
         children=[
             dcc.Location(id="url", refresh=False),
             dcc.Store(id="menu_open", data=True),
 
-            dcc.Store(id="bench_data_store", data=DATA_ROWS),
-            dcc.Store(id="bench_out_store", data=OUT_ROWS),
+            # Keep these light. Do not load large rows here.
+            dcc.Store(id="bench_data_store", data=BENCH_DATA_ROWS),
+            dcc.Store(id="bench_out_store", data=BENCH_OUT_ROWS),
             dcc.Store(id="shared-inputs", storage_type="session"),
+
+            # Used only to trigger cache clearing from app.py.
+            dcc.Store(id="rul_cache_clean_signal"),
 
             dbc.Navbar(
                 dbc.Container(
@@ -342,6 +390,9 @@ def serve_layout():
         ],
     )
 
+    print_memory("after serve_layout")
+    return layout_obj
+
 
 app.layout = serve_layout
 
@@ -396,18 +447,26 @@ def render_page(pathname):
     if not pathname:
         pathname = "/"
 
+    print_memory(f"before loading page {pathname}")
+
     # If user leaves the heavy RUL page, clear its memory.
     if pathname != "/rul-distribution":
         clear_rul_distribution_memory(clear_dataset_cache=True)
 
     if pathname not in ROUTES:
+        print_memory(f"404 page {pathname}")
         return dbc.Alert("404 — Page not found", color="warning")
 
     try:
         install_rul_distribution_memory_guards()
-        return ROUTES[pathname][1]()
+
+        page = ROUTES[pathname][1]()
+
+        print_memory(f"after loading page {pathname}")
+        return page
 
     except Exception as e:
+        print_memory(f"error while loading page {pathname}")
         return dbc.Alert(
             [
                 html.H5("This page could not be loaded."),
@@ -416,6 +475,32 @@ def render_page(pathname):
             ],
             color="danger",
         )
+
+
+@app.callback(
+    Output("rul_cache_clean_signal", "data"),
+    Input("rul_split", "value"),
+    Input("rul_machine_id", "value"),
+    prevent_initial_call=True,
+)
+def clear_rul_cache_on_machine_change(split, machine_id):
+    """
+    This callback does not edit the RUL page.
+    It clears the RUL cache when the machine/split changes so old rolling
+    objects do not accumulate.
+    """
+    print_memory(f"before RUL input change clear split={split}, machine={machine_id}")
+
+    # Keep dataset cache to avoid rereading CSV every time.
+    # Clear only rolling prediction cache.
+    clear_rul_distribution_memory(clear_dataset_cache=False)
+
+    print_memory(f"after RUL input change clear split={split}, machine={machine_id}")
+
+    return {
+        "split": split,
+        "machine_id": machine_id,
+    }
 
 
 # =============================================================================
@@ -430,6 +515,8 @@ cost_sensitive_model.register_callbacks(app)
 maintenance_planning.register_callbacks(app)
 benchmark.register_callbacks(app)
 
+print_memory("after registering callbacks")
+
 
 # =============================================================================
 # Local run
@@ -437,4 +524,5 @@ benchmark.register_callbacks(app)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
+    print_memory("before app.run")
     app.run(debug=False, host="0.0.0.0", port=port)
