@@ -1,8 +1,7 @@
-
-
-
-
 # app.py
+import os
+import gc
+
 from dash import Dash, dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 
@@ -24,13 +23,18 @@ external_stylesheets = [
 app = Dash(
     __name__,
     suppress_callback_exceptions=True,
-    use_pages=True,
     external_stylesheets=external_stylesheets,
     assets_folder="assets",
 )
 
 server = app.server
 app.title = "Cost-sensitive predictive maintenance"
+
+
+@server.route("/health")
+def health():
+    return "ok", 200
+
 
 ROUTES = {
     "/": ("Home", home.layout),
@@ -54,6 +58,25 @@ ICONS = {
 
 DATA_ROWS = benchmark.DATA_ROWS
 OUT_ROWS = benchmark.OUT_ROWS
+
+
+def clear_rul_distribution_memory():
+    """
+    Do not edit pages/rul_distribution.py, but when the user leaves that page,
+    clear its module-level caches from here.
+    """
+    try:
+        if hasattr(rul_distribution, "_ROLLING_CACHE"):
+            rul_distribution._ROLLING_CACHE.clear()
+
+        # Clear dataset cache too when leaving the page.
+        # If you want faster reloads, comment out this block.
+        if hasattr(rul_distribution, "_CACHE"):
+            rul_distribution._CACHE.clear()
+
+        gc.collect()
+    except Exception:
+        pass
 
 
 def nav_link(label, href, icon_class):
@@ -94,84 +117,88 @@ def content_style():
     }
 
 
-app.layout = dbc.Container(
-    fluid=True,
-    className="px-0",
-    children=[
-        dcc.Location(id="url", refresh=False),
-        dcc.Store(id="menu_open", data=True),
+def serve_layout():
+    return dbc.Container(
+        fluid=True,
+        className="px-0",
+        children=[
+            dcc.Location(id="url", refresh=False),
+            dcc.Store(id="menu_open", data=True),
 
-        dcc.Store(id="bench_data_store", data=DATA_ROWS),
-        dcc.Store(id="bench_out_store", data=OUT_ROWS),
-        dcc.Store(id="shared-inputs", storage_type="session"),
+            dcc.Store(id="bench_data_store", data=DATA_ROWS),
+            dcc.Store(id="bench_out_store", data=OUT_ROWS),
+            dcc.Store(id="shared-inputs", storage_type="session"),
 
-        dbc.Navbar(
-            dbc.Container(
-                fluid=True,
-                className="d-flex align-items-center",
-                children=[
-                    dbc.Button(
-                        html.I(className="fa-solid fa-bars"),
-                        id="menu_btn",
-                        n_clicks=0,
-                        color="secondary",
-                        outline=True,
-                        className="me-3",
-                    ),
-                    html.Div(id="page_title", className="fw-bold fs-5"),
-                ],
-            ),
-            color="light",
-            dark=False,
-            sticky="top",
-            className="border-bottom shadow-sm",
-            style={"minHeight": "64px"},
-        ),
-
-        html.Div(
-            id="app_shell",
-            style={
-                "display": "flex",
-                "width": "100%",
-                "minHeight": "calc(100vh - 64px)",
-            },
-            children=[
-                html.Div(
-                    id="sidebar",
-                    style=sidebar_style(True),
+            dbc.Navbar(
+                dbc.Container(
+                    fluid=True,
+                    className="d-flex align-items-center",
                     children=[
-                        html.Div(
-                            [
-                                html.Div("Menu", className="fw-bold mb-3"),
-                                dbc.Nav(
-                                    [
-                                        nav_link("Home", "/", ICONS["/"]),
-                                        nav_link("Cost function", "/cost-function", ICONS["/cost-function"]),
-                                        nav_link("Data Simulator", "/data-simulator", ICONS["/data-simulator"]),
-                                        nav_link("RUL distribution", "/rul-distribution", ICONS["/rul-distribution"]),
-                                        nav_link("Cost sensitive model", "/cost-sensitive-model", ICONS["/cost-sensitive-model"]),
-                                        nav_link("Maintenance planning", "/maintenance-planning", ICONS["/maintenance-planning"]),
-                                        nav_link("Benchmark", "/benchmark", ICONS["/benchmark"]),
-                                    ],
-                                    vertical=True,
-                                    pills=True,
-                                    className="flex-column",
-                                ),
-                            ],
-                            className="p-3",
-                        )
+                        dbc.Button(
+                            html.I(className="fa-solid fa-bars"),
+                            id="menu_btn",
+                            n_clicks=0,
+                            color="secondary",
+                            outline=True,
+                            className="me-3",
+                        ),
+                        html.Div(id="page_title", className="fw-bold fs-5"),
                     ],
                 ),
+                color="light",
+                dark=False,
+                sticky="top",
+                className="border-bottom shadow-sm",
+                style={"minHeight": "64px"},
+            ),
 
-                html.Div(
-                    id="content",
-                    style=content_style(),
-                    children=[html.Div(id="page_content")],
-                ),
-            ],
-        ),
-    ],
-)
+            html.Div(
+                id="app_shell",
+                style={
+                    "display": "flex",
+                    "width": "100%",
+                    "minHeight": "calc(100vh - 64px)",
+                },
+                children=[
+                    html.Div(
+                        id="sidebar",
+                        style=sidebar_style(True),
+                        children=[
+                            html.Div(
+                                [
+                                    html.Div("Menu", className="fw-bold mb-3"),
+                                    dbc.Nav(
+                                        [
+                                            nav_link("Home", "/", ICONS["/"]),
+                                            nav_link("Cost function", "/cost-function", ICONS["/cost-function"]),
+                                            nav_link("Data Simulator", "/data-simulator", ICONS["/data-simulator"]),
+                                            nav_link("RUL distribution", "/rul-distribution", ICONS["/rul-distribution"]),
+                                            nav_link("Cost sensitive model", "/cost-sensitive-model", ICONS["/cost-sensitive-model"]),
+                                            nav_link("Maintenance planning", "/maintenance-planning", ICONS["/maintenance-planning"]),
+                                            nav_link("Benchmark", "/benchmark", ICONS["/benchmark"]),
+                                        ],
+                                        vertical=True,
+                                        pills=True,
+                                        className="flex-column",
+                                    ),
+                                ],
+                                className="p-3",
+                            )
+                        ],
+                    ),
+
+                    html.Div(
+                        id="content",
+                        style=content_style(),
+                        children=[html.Div(id="page_content")],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+app.layout = serve_layout
 
 
 @app.callback(
@@ -220,10 +247,24 @@ def render_page(pathname):
     if not pathname:
         pathname = "/"
 
+    # If the user leaves the heavy page, clear its memory.
+    if pathname != "/rul-distribution":
+        clear_rul_distribution_memory()
+
     if pathname not in ROUTES:
         return dbc.Alert("404 — Page not found", color="warning")
 
-    return ROUTES[pathname][1]()
+    try:
+        return ROUTES[pathname][1]()
+    except Exception as e:
+        return dbc.Alert(
+            [
+                html.H5("This page could not be loaded."),
+                html.Div("The Python error was:"),
+                html.Pre(str(e), style={"whiteSpace": "pre-wrap"}),
+            ],
+            color="danger",
+        )
 
 
 home.register_callbacks(app)
@@ -234,21 +275,7 @@ cost_sensitive_model.register_callbacks(app)
 maintenance_planning.register_callbacks(app)
 benchmark.register_callbacks(app)
 
-app.validation_layout = html.Div(
-    [
-        app.layout,
-        home.layout(),
-        cost_function.layout(),
-        data_simulator.layout(),
-        rul_distribution.layout(),
-        cost_sensitive_model.layout(),
-        maintenance_planning.layout(),
-        benchmark.layout(),
-    ]
-)
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 8050))
-    #app.run(debug=True, use_reloader=False, host="0.0.0.0", port=port)
-    app.run_server(debug=False, host="0.0.0.0", port=port)
+    app.run(debug=False, host="0.0.0.0", port=port)
